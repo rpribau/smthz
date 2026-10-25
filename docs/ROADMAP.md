@@ -1,0 +1,50 @@
+# smthz implementation roadmap
+
+## Approved product
+
+Native macOS 26+ Apple Silicon application, English UI, SwiftUI/AppKit shell and Swift-owned core. Reimplement the applicable Orca 1.4.238 desktop workflows from `reference/orca-1.4.238`; use `icon/icon.png` as the brand source. Windows, companion mobile applications and importing Orca application state are deferred. Desktop iOS/Android development tools remain in scope. Execution hosts support macOS and Linux.
+
+Use public WebKit APIs exclusively for browsing. When an experiment demonstrates a gap, investigate an equivalent native workflow. Any actual reduction in functionality requires the user's explicit acceptance. Chromium and private APIs are excluded. Small page scripts and isolated document renderers are allowed; application state and authority remain in Swift.
+
+Own accounts, relay, pairing/revocation, profiles, sharing and artifact/skill storage services are required. Do not use Orca production endpoints or credentials. Native C/C++ dependencies and external Git, ripgrep, OpenSSH and agent executables are permitted. Node is restricted to justified isolated compatibility adapters, never the application core.
+
+## Architecture
+
+- SwiftUI navigation/settings plus AppKit terminal, editor and document surfaces. Liquid Glass on navigation and controls; stable semantic surfaces for working content.
+- Independent Swift `smthzd` execution host, persistent PTY owner, Swift CLI and macOS UI. Each execution host owns its processes, workspaces, accounts, journals and scheduling. Windows own presentation state.
+- SQLite transactions and journals, bounded file/blob storage, authenticated Unix socket locally and versioned WebSocket remotely. Request IDs, capabilities, process incarnations, cancellation, limits and acknowledgements are explicit contracts.
+- No resubmission of possibly executed input after connection loss. No treating missing observations as proof of process death. PID alone is not process ownership.
+- SwiftTerm is the first terminal engine to evaluate; editor parity and Claude's native control path require experiments. No engine or SDK replacement is assumed equivalent without evidence.
+
+## Milestones
+
+| ID | Deliverable | Acceptance |
+|---|---|---|
+| M0 | Swift project, identities, durable ledger, build prerequisites | Build and tests; traceable scope; no false completed-feature claims |
+| M1 | PTY/terminal, editor, WebKit macOS/Linux, Claude and helper experiments | Reproducible behavior, limitations and evidence for each choice |
+| M2 | SQLite recovery, process ownership, host/CLI and authenticated RPC | Crash/reconnect/idempotency/identity tests |
+| M3 | Native shell, persistent terminals, tabs, groups, splits and windows | Real processes survive UI detach; restore does not duplicate work |
+| M4 | Project/folder/worktree/Git/hooks, files/editor/diffs/documents | Folder and Git journeys, safe saves, recovery and meaningful edits |
+| M5 | Agent launch, provider transports, accounts/chat/permissions/history/usage | Capabilities match each provider; no duplicate sends or wrong-host state |
+| M6 | WebKit browser, profiles/design/automation/capture/routing | Browser capability fixtures; explicit native equivalents for gaps |
+| M7 | Own auth/relay, SSH and paired macOS/Linux hosts, tunnels/update | Real deployment, pairing/revocation/reconnect and remote journeys |
+| M8 | Orchestration DAG/mail/receipts/federation, automation, VM recipes | Durable ownership and failed-attempt recovery; real scheduled runs |
+| M9 | Hosted integrations, skills/plugins/artifacts and own storage/sharing | Per-provider workflows; real installation and publication grants |
+| M10 | Speech/computer-use/emulators/attention/pet/settings | Real prerequisite-backed features, permissions and accessible UI |
+| M11 | Full ledger audit, recovery, benchmarks, distribution/update/notices | Evidence-backed parity; signed install/update; accepted performance |
+
+Backend contracts begin with M2; real auth/relay precedes public pairing and real storage precedes sharing. Work proceeds in small dependency-ordered tasks, not one request per entire milestone. A working early slice is not completion of full desktop parity.
+
+## Validation and performance
+
+Port relevant reference invariants and fixtures rather than its historical implementation structure. Use real PTY, Git, filesystem, SQLite, socket, provider, WebKit and UI tests. Include cancellation, denied access, disk-full, stale identity, revoked pairing, host restart, lost acknowledgement and reconnect scenarios. Test macOS/Linux and plain folders independently of Git.
+
+Compare Release builds against Orca with equivalent workloads on the same hardware, OS, repositories and agent binaries. Report app/host/helpers, WebKit WebContent/network/GPU and external agents/tools separately, plus total cost and attribution limits. Measure startup, input-to-PTY and input-to-paint latency, workspace switching, idle/peak CPU, retained memory, energy and multi-hour recovery/soak. Set numerical budgets only after the baseline; do not claim savings without measurements.
+
+## Execution ownership
+
+Only Hermes authors implementation code, using its current configured model `yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF`. Use a fresh session for each bounded task. The coordinator prepares specifications, documents decisions, reviews changes and executes verification; route code corrections back to Hermes. GPT-6.1-Sol High research/design tasks have completed; their findings are reflected in this roadmap and the ledger.
+
+## Current state
+
+Implementation started 2026-10-23 local time. No milestone is accepted yet. Full Xcode is not installed in `/Applications`; selected tools are Command Line Tools, Swift 6.4 and SDK 27. Building a Swift package is possible; full Xcode/UI/signing/simulator verification remains pending. No infrastructure or signing credentials have been provisioned.

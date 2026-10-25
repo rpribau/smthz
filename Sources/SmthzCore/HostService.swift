@@ -1,0 +1,407 @@
+import Foundation
+import CryptoKit
+import Darwin
+
+/// A local capability stored separately from the socket. Symlinks and permissive
+/// files fail closed; a failed token load never disables authentication.
+public enum HostCapabilityToken {
+    public static func path(socketPath: String) -> String {
+        ((socketPath as NSString).deletingLastPathComponent as NSString).appendingPathComponent("capability.token")
+    }
+
+    public static func load(path: String, create: Bool = false) throws -> String {
+        if create {
+            let fd = Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            if fd >= 0 {
+                let bytes = Array(random().utf8)
+                let written = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+                let success = written == bytes.count && fsync(fd) == 0
+                Darwin.close(fd)
+                guard success else { unlink(path); throw HostClientError.hostError(code: "authenticationUnavailable") }
+            } else if errno != EEXIST {
+                throw HostClientError.hostError(code: "authenticationUnavailable")
+            }
+        }
+        let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { throw HostClientError.hostError(code: "authenticationUnavailable") }
+        defer { Darwin.close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_uid == geteuid(), info.st_mode & 0o777 == 0o600,
+              info.st_nlink == 1, info.st_size == 64 else {
+            throw HostClientError.hostError(code: "authenticationUnavailable")
+        }
+        var bytes = [UInt8](repeating: 0, count: 65)
+        let count = Darwin.read(fd, &bytes, bytes.count)
+        guard count == 64, bytes.prefix(64).allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw HostClientError.hostError(code: "authenticationUnavailable")
+        }
+        return String(decoding: bytes.prefix(64), as: UTF8.self)
+    }
+
+    static func random() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        bytes.withUnsafeMutableBytes { arc4random_buf($0.baseAddress!, $0.count) }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func matches(_ supplied: String?, _ expected: String) -> Bool {
+        // Both hashes are fixed length, including for malformed credentials.
+        let lhs = Array(SHA256.hash(data: Data((supplied ?? "").utf8)))
+        let rhs = Array(SHA256.hash(data: Data(expected.utf8)))
+        var difference: UInt8 = 0
+        for index in lhs.indices { difference |= lhs[index] ^ rhs[index] }
+        return difference == 0
+    }
+}
+
+public final class HostService: @unchecked Sendable {
+    private let journal: EventJournal
+    public let sessionManager: SessionManager
+    private let hostIdentity: ProcessIdentity?
+    private let hostEnvironment: [String: String]
+    public let capabilityTokenPath: String
+    private let capabilityToken: String?
+    private let credential = HostCapabilityToken.random()
+    private let stateLock = NSLock()
+    private var active: [UUID: Control] = [:]
+    public static let maximumPendingRequests = 64
+    public static let maximumRequestBytes = 700_000
+    public static let maximumTimeoutMilliseconds = 30_000
+
+    private final class Control: @unchecked Sendable {
+        let requestID: String
+        let deadline: DispatchTime
+        private let lock = NSLock()
+        private var cancelled = false
+        init(requestID: String, milliseconds: Int) {
+            self.requestID = requestID
+            deadline = .now() + .milliseconds(milliseconds)
+        }
+        func cancel() { lock.withLock { cancelled = true } }
+        var error: String? {
+            lock.withLock {
+                if cancelled { return "cancelled" }
+                return DispatchTime.now() >= deadline ? "deadlineExceeded" : nil
+            }
+        }
+    }
+    // Serialize lookup, execution, and append across concurrent socket clients.
+    private let lock = NSLock()
+    private var stopped = false
+    private let scrollbackDirectory: URL?
+    private let onShutdown: (@Sendable () -> Void)?
+    private var shutdownRequested = false
+    private var shutdownDelivered = false
+
+    public init(journal: EventJournal, hostIdentity: ProcessIdentity?, sessionManager: SessionManager? = nil, capabilityTokenPath: String? = nil,
+                hostEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+                scrollbackDirectory: URL? = nil, onShutdown: (@Sendable () -> Void)? = nil) {
+        self.scrollbackDirectory = scrollbackDirectory
+        self.onShutdown = onShutdown
+        self.hostEnvironment = hostEnvironment
+        let tokenPath = capabilityTokenPath ?? ((journal.path as NSString).deletingLastPathComponent as NSString).appendingPathComponent("capability.token")
+        self.capabilityTokenPath = tokenPath
+        self.capabilityToken = try? HostCapabilityToken.load(path: tokenPath, create: true)
+        self.journal = journal
+        self.sessionManager = sessionManager ?? SessionManager(journal: journal)
+        self.hostIdentity = hostIdentity
+    }
+
+    public func handle(_ payload: Data) -> Data {
+        guard let request = try? JSONDecoder().decode(RPCEnvelope.self, from: payload) else {
+            return response(to: RPCEnvelope(version: 1, requestID: "", method: "", payload: Data()),
+                            body: Body(ok: false, error: "badRequest"))
+        }
+        guard request.version == RPCEnvelope.currentVersion else {
+            return response(to: request, body: Body(ok: false, error: "protocolVersionMismatch"))
+        }
+        guard !request.requestID.isEmpty, request.requestID.utf8.count <= 128,
+              request.method.utf8.count <= 128, request.payload.count <= Self.maximumRequestBytes,
+              payload.count <= RPCFrameCodec.maxFrameSize else {
+            return response(to: request, body: Body(ok: false, error: "badRequest"))
+        }
+        guard let capabilityToken else {
+            return response(to: request, body: Body(ok: false, error: "authenticationUnavailable"))
+        }
+        if request.method == "handshake" {
+            struct Handshake: Decodable { let token: String }
+            guard let params = try? JSONDecoder().decode(Handshake.self, from: request.payload),
+                  HostCapabilityToken.matches(params.token, capabilityToken) else {
+                return response(to: request, body: Body(ok: false, error: "unauthorized"))
+            }
+            return response(to: request, body: Body(ok: true, credential: credential))
+        }
+        guard HostCapabilityToken.matches(request.authorization, credential) else {
+            return response(to: request, body: Body(ok: false, error: "unauthorized"))
+        }
+        let timeout = request.timeoutMilliseconds ?? 5_000
+        guard (1...Self.maximumTimeoutMilliseconds).contains(timeout) else {
+            return response(to: request, body: Body(ok: false, error: "limitExceeded"))
+        }
+        if request.method == "request.cancel" {
+            struct Cancel: Decodable { let requestID: String }
+            guard let params = try? JSONDecoder().decode(Cancel.self, from: request.payload) else {
+                return response(to: request, body: Body(ok: false, error: "badRequest"))
+            }
+            let found = stateLock.withLock {
+                let targets = active.values.filter { $0.requestID == params.requestID }
+                targets.forEach { $0.cancel() }
+                return !targets.isEmpty
+            }
+            return response(to: request, body: Body(ok: true, cancelled: found))
+        }
+        let control = Control(requestID: request.requestID, milliseconds: timeout)
+        let ticket = UUID()
+        let admitted = stateLock.withLock {
+            guard active.count < Self.maximumPendingRequests else { return false }
+            active[ticket] = control
+            return true
+        }
+        guard admitted else { return response(to: request, body: Body(ok: false, error: "limitExceeded")) }
+        defer { _ = stateLock.withLock { active.removeValue(forKey: ticket) } }
+        // Cancellable lock acquisition bounds queue wait without dispatching detached work.
+        while !lock.try() {
+            if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        defer { lock.unlock() }
+        guard !stopped else { return response(to: request, body: Body(ok: false, error: "hostStopping")) }
+        while !sessionManager.journalLock.try() {
+            if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        defer { sessionManager.journalLock.unlock() }
+        if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
+        // Foreground state is live and read-only; retries must never replay an
+        // earlier job's process group or leave durable response rows.
+        if request.method == "session.foreground" {
+            return response(to: request, body: sessionResponse(request, control: control))
+        }
+        let paramsHash = Self.paramsHash(request.payload)
+        var createdID: String?
+        do {
+            if let entry = try journal.entry(requestID: request.requestID) {
+                guard try journal.matchesRequest(requestID: request.requestID, method: request.method, paramsHash: paramsHash) else {
+                    return response(to: request, body: Body(ok: false, error: "idempotencyConflict"))
+                }
+                return entry.payload
+            }
+            let body: Body
+            switch request.method {
+            case let method where method.hasPrefix("session."):
+                body = sessionResponse(request, control: control)
+                if request.method == "session.create", body.ok { createdID = body.id }
+            case "host.shutdown":
+                if let params = try JSONSerialization.jsonObject(with: request.payload) as? [String: Any], params.isEmpty {
+                    body = Body(ok: true)
+                } else {
+                    body = Body(ok: false, error: "badRequest")
+                }
+            case "ping":
+                body = Body(ok: true, result: "pong")
+            case "version":
+                body = Body(ok: true, result: ApplicationIdentity.version)
+            case "host.identity":
+                if let identity = hostIdentity {
+                    body = Body(ok: true, pid: identity.pid, startSeconds: identity.startSeconds,
+                                startMicroseconds: identity.startMicroseconds)
+                } else {
+                    body = Body(ok: false, error: "identityUnavailable")
+                }
+            default:
+                body = Body(ok: false, error: "unknownMethod")
+            }
+            let encoded = response(to: request, body: body)
+            guard encoded.count <= RPCFrameCodec.maxFrameSize else {
+                if let createdID { sessionManager.discard(id: createdID) }
+                return response(to: request, body: Body(ok: false, error: "limitExceeded"))
+            }
+            try journal.appendResponse(requestID: request.requestID, method: request.method,
+                                       paramsHash: paramsHash, payload: encoded)
+            if request.method == "host.shutdown", body.ok { shutdownRequested = true }
+            return encoded
+        } catch {
+            if let createdID { sessionManager.discard(id: createdID) }
+            return response(to: request, body: Body(ok: false, error: "journalFailure"))
+        }
+    }
+
+    /// Called by the transport only after a complete reply frame has been written.
+    /// Scheduling is injected by the daemon so teardown runs on its main queue.
+    public func responseFlushed(_ payload: Data) {
+        guard let envelope = try? JSONDecoder().decode(RPCEnvelope.self, from: payload),
+              envelope.method == "host.shutdown",
+              let object = try? JSONSerialization.jsonObject(with: envelope.payload) as? [String: Any],
+              object["ok"] as? Bool == true else { return }
+        let callback: (@Sendable () -> Void)? = lock.withLock {
+            guard shutdownRequested, !shutdownDelivered, !stopped else { return nil }
+            shutdownDelivered = true
+            return onShutdown
+        }
+        callback?()
+    }
+
+    /// Completes session teardown before the daemon removes its socket.
+    public func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopped else { return }
+        stopped = true
+        sessionManager.stop()
+    }
+
+    deinit { stop() }
+
+    private struct Body: Encodable {
+        let ok: Bool
+        var credential: String? = nil
+        var cancelled: Bool? = nil
+        var result: String? = nil
+        var error: String? = nil
+        var pid: Int32? = nil
+        var startSeconds: UInt64? = nil
+        var startMicroseconds: UInt64? = nil
+        var id: String? = nil
+        var running: Bool? = nil
+        var executable: String? = nil
+        var arguments: [String]? = nil
+        var cwd: String? = nil
+        var createdAt: Double? = nil
+        var pgid: Int32? = nil
+        var isShell: Bool? = nil
+        var sessions: [SessionInfo]? = nil
+        var data_base64: String? = nil
+        var next: UInt64? = nil
+        var eof: Bool? = nil
+        var truncated: Bool? = nil
+        var exit: ExitBody? = nil
+    }
+
+    private struct ExitBody: Encodable {
+        var code: Int32? = nil
+        var signal: Int32? = nil
+    }
+
+    private struct CreateParams: Decodable {
+        let executable: String
+        let arguments: [String]
+        var environment: [String: String]?
+        var cwd: String?
+        var rows: Int?
+        var cols: Int?
+    }
+    private struct IDParams: Decodable { let id: String }
+    private struct WriteParams: Decodable { let id: String; let data_base64: String }
+    private struct ResizeParams: Decodable { let id: String; let rows: Int; let cols: Int }
+    private struct ReadParams: Decodable { let id: String; let from: UInt64; var maxBytes: Int? }
+
+    private func sessionResponse(_ request: RPCEnvelope, control: Control) -> Body {
+        let decoder = JSONDecoder()
+        do {
+            switch request.method {
+            case "session.create":
+                let p = try decoder.decode(CreateParams.self, from: request.payload)
+                let info = try sessionManager.create(executable: p.executable, arguments: p.arguments,
+                    environment: SessionEnvironment.build(base: hostEnvironment,
+                                                          override: p.environment),
+                    workingDirectory: p.cwd, rows: p.rows ?? 24, cols: p.cols ?? 80)
+                return Body(ok: true, pid: info.pid, startSeconds: info.startSeconds,
+                            startMicroseconds: info.startMicroseconds, id: info.id, running: info.running,
+                            executable: info.executable, arguments: info.arguments, cwd: info.cwd,
+                            createdAt: info.createdAt)
+            case "session.foreground":
+                let p = try decoder.decode(IDParams.self, from: request.payload)
+                let foreground = try sessionManager.foreground(id: p.id)
+                return Body(ok: true, pid: foreground.pid, executable: foreground.executable,
+                            pgid: foreground.pgid, isShell: foreground.isShell)
+            case "session.write":
+                let p = try decoder.decode(WriteParams.self, from: request.payload)
+                guard p.data_base64.utf8.count <= ((SessionManager.maximumTransferBytes + 2) / 3) * 4,
+                      let data = Data(base64Encoded: p.data_base64),
+                      data.count <= SessionManager.maximumTransferBytes else { throw SessionError.badRequest }
+                try sessionManager.write(id: p.id, data: data, shouldCancel: { control.error != nil })
+                return Body(ok: true)
+            case "session.resize":
+                let p = try decoder.decode(ResizeParams.self, from: request.payload)
+                try sessionManager.resize(id: p.id, rows: p.rows, cols: p.cols)
+                return Body(ok: true)
+            case "session.read":
+                let p = try decoder.decode(ReadParams.self, from: request.payload)
+                let limit = p.maxBytes ?? SessionManager.maximumTransferBytes
+                guard limit > 0 else { throw SessionError.badRequest }
+                // JSON Data in the envelope adds a second layer of base64. Leave
+                // room for both layers and metadata within the 1 MiB frame.
+                let result = try sessionManager.read(id: p.id, from: p.from, maxBytes: min(limit, 512 * 1024))
+                var exit: ExitBody?
+                switch result.exit {
+                case .exited(let code): exit = ExitBody(code: code)
+                case .signaled(let signal): exit = ExitBody(signal: signal)
+                case nil: break
+                }
+                return Body(ok: true, data_base64: result.data.base64EncodedString(), next: result.nextOffset,
+                            truncated: result.truncated, exit: exit)
+            case "session.replay":
+                let p = try decoder.decode(ReadParams.self, from: request.payload)
+                guard UUID(uuidString: p.id)?.uuidString.lowercased() == p.id,
+                      (p.maxBytes ?? SessionManager.maximumTransferBytes) > 0 else { throw SessionError.badRequest }
+                let limit = min(p.maxBytes ?? SessionManager.maximumTransferBytes, 512 * 1024)
+                // A live writer must be read under the manager's record lock.
+                if sessionManager.list().contains(where: { $0.id == p.id }) {
+                    let result = try sessionManager.read(id: p.id, from: p.from, maxBytes: limit)
+                    let tail = try sessionManager.read(id: p.id, from: result.nextOffset, maxBytes: 1)
+                    return Body(ok: true, data_base64: result.data.base64EncodedString(),
+                                next: result.nextOffset, eof: tail.data.isEmpty)
+                }
+                guard let directory = scrollbackDirectory else { throw SessionError.unknownSession }
+                var metadata = stat()
+                let path = directory.appendingPathComponent(p.id + ".scrollback").path
+                if lstat(path, &metadata) != 0 {
+                    throw errno == ENOENT ? SessionError.unknownSession : SessionError.scrollbackFailure
+                }
+                let result = try SessionManager.readScrollback(id: p.id, directory: directory, from: p.from, maxBytes: limit)
+                let tail = try SessionManager.readScrollback(id: p.id, directory: directory, from: result.nextOffset, maxBytes: 1)
+                return Body(ok: true, data_base64: result.data.base64EncodedString(),
+                            next: result.nextOffset, eof: tail.data.isEmpty)
+            case "session.close":
+                let p = try decoder.decode(IDParams.self, from: request.payload)
+                try sessionManager.close(id: p.id)
+                return Body(ok: true)
+            case "session.list":
+                guard let params = try JSONSerialization.jsonObject(with: request.payload) as? [String: Any],
+                      params.isEmpty else { throw SessionError.badRequest }
+                return Body(ok: true, sessions: sessionManager.list())
+            default:
+                return Body(ok: false, error: "unknownMethod")
+            }
+        } catch let error as SessionError {
+            return Body(ok: false, error: control.error ?? error.rawValue)
+        } catch {
+            return Body(ok: false, error: "badRequest")
+        }
+    }
+
+    private static func paramsHash(_ payload: Data) -> String {
+        // Normalize JSON object key order so equivalent retries share a binding.
+        let canonical: Data
+        if let object = try? JSONSerialization.jsonObject(with: payload, options: [.fragmentsAllowed]),
+           let normalized = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes]) {
+            canonical = normalized
+        } else { canonical = payload }
+        return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func response(to request: RPCEnvelope, body: Body) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        // These synthesized Encodable types contain only finite integers, strings,
+        // booleans, and Data, so encoding cannot encounter an invalid JSON value.
+        do {
+            let envelope = RPCEnvelope(version: RPCEnvelope.currentVersion, requestID: request.requestID,
+                                       method: request.method, payload: try encoder.encode(body))
+            return try encoder.encode(envelope)
+        } catch {
+            return Data(#"{"version":1,"requestID":"","method":"","payload":"eyJvayI6ZmFsc2UsImVycm9yIjoiam91cm5hbEZhaWx1cmUifQ=="}"#.utf8)
+        }
+    }
+}

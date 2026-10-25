@@ -1,0 +1,141 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "extended-gray:0.30000,1.00000",
+          "extended-gray:0.05500,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0.2,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.8,
+            "y" : 1
+          }
+        }
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "extended-gray:0.13500,1.00000",
+          "extended-gray:0.00800,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0.2,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.8,
+            "y" : 1
+          }
+        }
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "figure.png",
+          "name" : "figure",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "name" : "Figure",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "hidden" : false,
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "dashes.svg",
+          "name" : "dashes",
+          "opacity-specializations" : [
+            {
+              "value" : 0.55
+            },
+            {
+              "appearance" : "dark",
+              "value" : 0.8
+            },
+            {
+              "appearance" : "tinted",
+              "value" : 0.9
+            }
+          ],
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "glass" : true,
+          "image-name" : "rings.svg",
+          "name" : "rings",
+          "opacity-specializations" : [
+            {
+              "value" : 0.62
+            },
+            {
+              "appearance" : "dark",
+              "value" : 0.82
+            },
+            {
+              "appearance" : "tinted",
+              "value" : 0.9
+            }
+          ],
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "lighting" : "combined",
+      "name" : "Rings",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.4
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.4
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}

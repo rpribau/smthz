@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+
+# SwiftPM / Xcode build products
+.build/
+.build-*/
+.swiftpm/
+/Packages
+xcuserdata/
+DerivedData/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# App bundle produced by scripts/package-app.sh
+build/
+
+# Logs and local scratch
+*.log
+.rejected/
+.netrc
+
+# Agent tooling installed locally (third-party skills, not part of the product)
+.agents/
+.claude/
+.hermes/
+skills-lock.json
+
+# Vendored upstream source used only as read-only reference (about 389 MB,
+# MIT, contains third-party logos and lockfiles). See docs/PUBLISHING.md.
+reference/
+
+# Internal project-management files (kept locally, not published)
+AGENTS.md
+docs/HANDOFF.md
+docs/PUBLISHING.md
+docs/LICENSE-DECISION.md
+docs/orchestration-scripts/
