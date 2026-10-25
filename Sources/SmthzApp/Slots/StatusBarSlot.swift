@@ -2,7 +2,7 @@ import SmthzCore
 import SwiftUI
 
 struct StatusBarSlot: View {
-    let model: WorkspaceModel
+    let model: ShellController
     var goToSession: ((String) -> Void)? = nil
     @State private var visibility = StatusBarVisibility()
 

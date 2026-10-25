@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Full-page settings shell (§11). Routes page ids to panes; unbuilt pages show a placeholder.
 struct SettingsView: View {
-    let model: WorkspaceModel
+    let model: ShellController
     @Binding var sidebarOpen: Bool
     @Binding var rightSidebarOpen: Bool
     let onBack: () -> Void

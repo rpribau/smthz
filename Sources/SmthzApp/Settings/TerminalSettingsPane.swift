@@ -3,7 +3,7 @@ import SwiftUI
 
 // VISUAL-ONLY: stub data until terminal shell, rendering, split-pane and interaction settings integration.
 struct TerminalSettingsPane: View {
-    let model: WorkspaceModel
+    let model: ShellController
 
     var body: some View {
         SmthzTerminalSettingsControls(onFontSizeChange: { model.terminalFontSize = $0 })

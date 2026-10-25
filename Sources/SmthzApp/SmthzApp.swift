@@ -41,6 +41,7 @@ struct SmthzApp: App {
         WindowGroup("Workspaces") {
             SmthzUIZoom {
                 ShellView(appModel: model)
+                    .onAppear { delegate.shell = model.workspace }
             }
             .frame(minWidth: 600, minHeight: 400)
         }
@@ -141,6 +142,8 @@ struct SmthzShellCommands: Commands {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    var shell: ShellController?
+    func applicationWillTerminate(_ notification: Notification) { shell?.flush() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
         NSApplication.shared.setActivationPolicy(.regular)
@@ -153,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// The App owns reference-backed UI state without relying on SwiftUI macros.
 @MainActor @Observable
 final class AppModel {
-    let workspace = WorkspaceModel()
+    let workspace = ShellController()
     var destination: Destination? = .workspaces
     var columns: NavigationSplitViewVisibility = .all
 }

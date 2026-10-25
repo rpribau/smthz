@@ -52,7 +52,7 @@ struct ShellTitleControls: View {
 struct SidebarSlot: View {
     let appModel: AppModel
     @Binding var sidebarOpen: Bool
-    private var model: WorkspaceModel { appModel.workspace }
+    private var model: ShellController { appModel.workspace }
 
     var body: some View {
         VStack(spacing: 0) {

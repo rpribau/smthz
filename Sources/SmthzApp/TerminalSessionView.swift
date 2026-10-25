@@ -369,6 +369,7 @@ struct TerminalSessionView: View {
     var onTitleChange: (String) -> Void = { _ in }
     var onDirectoryChange: (String?) -> Void = { _ in }
     var onSessionRestart: (SessionInfo) -> Void = { _ in }
+    var restartSession: (() async -> Void)? = nil
     var onClose: (() -> Void)? = nil
     @State private var replacementID: String?
 
@@ -376,7 +377,7 @@ struct TerminalSessionView: View {
         SmthzTerminalPane(sessionID: replacementID ?? sessionID, socketPath: socketPath,
             fontSize: fontSize, isActive: isActive, paneID: paneID,
             onTitleChange: onTitleChange, onDirectoryChange: onDirectoryChange,
-            onRestart: { session in replacementID = session.id; onSessionRestart(session) }, onClose: onClose)
+            onRestart: { session in replacementID = session.id; onSessionRestart(session) }, onClose: onClose, restartSession: restartSession)
             .id(replacementID ?? sessionID)
             .onChange(of: sessionID) { replacementID = nil }
     }
@@ -391,10 +392,11 @@ private struct SmthzTerminalPane: View {
     let onDirectoryChange: (String?) -> Void
     let onRestart: (SessionInfo) -> Void
     let onClose: (() -> Void)?
+    let restartSession: (() async -> Void)?
 
     init(sessionID: String, socketPath: String, fontSize: Double, isActive: Bool, paneID: String?,
          onTitleChange: @escaping (String) -> Void, onDirectoryChange: @escaping (String?) -> Void,
-         onRestart: @escaping (SessionInfo) -> Void, onClose: (() -> Void)?) {
+         onRestart: @escaping (SessionInfo) -> Void, onClose: (() -> Void)?, restartSession: (() async -> Void)?) {
         _controller = StateObject(wrappedValue: TerminalSessionController(sessionID: sessionID,
             socketPath: socketPath, fontSize: fontSize))
         self.fontSize = fontSize
@@ -404,6 +406,7 @@ private struct SmthzTerminalPane: View {
         self.onDirectoryChange = onDirectoryChange
         self.onRestart = onRestart
         self.onClose = onClose
+        self.restartSession = restartSession
     }
 
     var body: some View {
@@ -422,7 +425,10 @@ private struct SmthzTerminalPane: View {
                 if let exit = controller.exit {
                     SmthzTerminalExitOverlay(exit: exit, restarting: controller.restarting,
                         error: controller.restartError, close: onClose, restart: {
-                            Task { if let session = await controller.restart() { onRestart(session) } }
+                            Task {
+                                if let restartSession { await restartSession() }
+                                else if let session = await controller.restart() { onRestart(session) }
+                            }
                         })
                 }
             }

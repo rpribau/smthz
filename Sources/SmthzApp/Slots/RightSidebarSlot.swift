@@ -4,12 +4,12 @@ import SwiftUI
 struct RightSidebarSlot: View {
     @Binding var isOpen: Bool
     /// Source of the active session's cwd; nil shows the "Select a workspace" states.
-    var model: WorkspaceModel?
+    var model: ShellController?
     @AppStorage("shell.rightSidebarPanel") private var storedPanel = RightSidebarPanel.explorer.rawValue
     @AppStorage("shell.rightSidebarBarPosition") private var storedPosition = RightSidebarBarPosition.top.rawValue
     @State private var isGit = false
 
-    init(isOpen: Binding<Bool>, model: WorkspaceModel? = nil) {
+    init(isOpen: Binding<Bool>, model: ShellController? = nil) {
         _isOpen = isOpen
         self.model = model
     }

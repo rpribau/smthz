@@ -5,7 +5,7 @@ import SmthzCore
 /// Temporary host adapter. Tab presentation and local ordering can later be fed
 /// directly by ShellController without changing the reusable strip.
 struct TabStripSlot: View {
-    let model: WorkspaceModel
+    let model: ShellController
     let newShell: () -> Void
     var command: (() -> Void)? = nil
     @State private var titles: [String: String] = [:]

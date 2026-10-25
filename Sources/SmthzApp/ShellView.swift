@@ -34,7 +34,7 @@ struct ShellView: View {
     @State private var renameID: String?
     @State private var renameDraft = ""
     private enum Surface { case jump, files, newWorkspace, addProject, deleteWorkspace, onboarding }
-    private var model: WorkspaceModel { appModel.workspace }
+    private var model: ShellController { appModel.workspace }
 
     var body: some View {
         ZStack {
@@ -122,9 +122,9 @@ struct ShellView: View {
     }
     private var tabs: some View {
         TabStripView(tabs: model.tabs, select: select, close: close,
-            rename: { model.userTitles[$0] = $1 }, togglePin: model.togglePin, reorder: model.reorder,
+            rename: { model.rename($0, title: $1) }, togglePin: model.togglePin, reorder: model.reorder,
             command: { quickCommandsOpen.toggle() }, createActions: createActions,
-            closeOthers: closeOthers, colourChange: { model.colours[$0] = $1 },
+            closeOthers: closeOthers, colourChange: { model.setColor($0, color: $1) },
             copyResult: { success in toast = SmthzToastMessage(title: success ? "Tab ID copied" : "Could not copy Tab ID", kind: success ? .success : .error) })
             .padding(.trailing, 32)
             .popover(isPresented: $quickCommandsOpen) {
@@ -153,9 +153,9 @@ struct ShellView: View {
                 LandingView(variant: .hostNotRunning, onRetry: { monitorGeneration += 1 })
             } else if let id = model.selectedSessionID {
                 TerminalSessionView(sessionID: id, socketPath: model.socketPath, fontSize: model.terminalFontSize,
-                    onTitleChange: { model.titles[id] = $0 },
+                    onTitleChange: { model.oscTitle(id, title: $0) },
                     onDirectoryChange: { model.directories[id] = $0 },
-                    onSessionRestart: { model.replace(id, with: $0) }, onClose: { close(id) })
+                    restartSession: { await model.restart(id) }, onClose: { close(id) })
                     .id(id).accessibilityLabel("Terminal")
             } else {
                 LandingView(hasProjects: false, onAddProject: { overlay = .addProject },
@@ -196,7 +196,7 @@ struct ShellView: View {
     private func dismiss() { overlay = nil }
     private func returnToWorkspace() { appModel.destination = .workspaces }
     private func select(_ id: String) {
-        model.closed.remove(id); model.selectedSessionID = id; settingsPage = nil; returnToWorkspace()
+        model.selectedSessionID = id; settingsPage = nil; returnToWorkspace()
     }
     private func newShell() {
         settingsPage = nil; returnToWorkspace(); Task { await model.newShell() }
@@ -216,7 +216,7 @@ struct ShellView: View {
     }
     private func commitRename() {
         if let renameID, !renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            model.userTitles[renameID] = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            model.rename(renameID, title: renameDraft.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         renameID = nil
     }
