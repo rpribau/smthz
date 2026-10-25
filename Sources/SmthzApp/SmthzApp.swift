@@ -48,7 +48,7 @@ struct SmthzApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: NSScreen.main?.visibleFrame.width ?? 1100,
                      height: NSScreen.main?.visibleFrame.height ?? 760)
-        .commands { SmthzShellCommands() }
+        .commands { SmthzShellCommands(); SmthzHostCommands() }
     }
 }
 

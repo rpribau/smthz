@@ -12,6 +12,7 @@ struct StatusBarView: View {
     let sessionCount: Int
     var sessions: [SessionInfo] = []
     var hostPID: Int32?
+    var hostSymbol: String?
     var visibility = StatusBarVisibility()
     var onGoToSession: ((SessionInfo) -> Void)?
     var onEndSession: ((SessionInfo) -> Void)?
@@ -69,9 +70,13 @@ struct StatusBarView: View {
 
     private func hostSegment(compact: Bool) -> some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(hostIsRunning ? SmthzTheme.statusSuccess : SmthzTheme.mutedForeground)
-                .frame(width: 6, height: 6)
+            if let hostSymbol {
+                Image(systemName: hostSymbol).font(.system(size: 10))
+            } else {
+                Circle()
+                    .fill(hostIsRunning ? SmthzTheme.statusSuccess : SmthzTheme.mutedForeground)
+                    .frame(width: 6, height: 6)
+            }
             if !compact { Text(hostLabel).lineLimit(1) }
         }
         .padding(.horizontal, 4)

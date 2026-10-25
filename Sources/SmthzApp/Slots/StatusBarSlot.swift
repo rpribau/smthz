@@ -3,17 +3,19 @@ import SwiftUI
 
 struct StatusBarSlot: View {
     let model: ShellController
+    var host: HostController? = nil
     var goToSession: ((String) -> Void)? = nil
     @State private var visibility = StatusBarVisibility()
 
     var body: some View {
         StatusBarView(
             hostIsRunning: model.hostIsRunning,
-            hostLabel: model.hostLabel,
-            hostDetail: model.hostDetail,
+            hostLabel: host?.label ?? model.hostLabel,
+            hostDetail: host?.detail ?? model.hostDetail,
             sessionCount: model.sessions.filter(\.running).count,
             sessions: model.sessions,
             hostPID: hostPID,
+            hostSymbol: host?.symbol,
             visibility: visibility,
             onGoToSession: { session in
                 if let goToSession { goToSession(session.id) } else { model.selectedSessionID = session.id }

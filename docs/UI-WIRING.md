@@ -8,6 +8,16 @@ Implemented 2026-10-25; state ownership updated by WP-A0. ShellController now ap
 
 | Entry point | Result | Status |
 |---|---|---|
+| App launch; automatic host recovery | Bundled `smthzd` via HostLauncher, default `autoStartHost=true`; authenticated probe before spawning, three attempts per 60 seconds | Real; disabled whenever `SMTHZ_SOCKET` is present |
+| `-SmthzStateDirectory <path>` | Shell persistence and host endpoint both use the selected directory | Real; `SMTHZ_SOCKET` overrides the socket only |
+| Host → Status | Current connection/lifecycle detail in a native alert | Real |
+| Host → Start Host | Ensure running; unreachable/authentication/protocol errors never cause a spawn | Real |
+| Host → Stop Host… / Restart Host… | Native confirmation lists running sessions, then HostLauncher authenticated shutdown with process-identity-verified fallback; Restart explicitly starts a replacement | Real; explicit Stop suppresses automatic relaunch for the current app lifetime |
+| Host → Start Host Automatically | UserDefaults `autoStartHost`, default true | Real; independent of quit, which preserves host sessions |
+| Host → Show Host Log | Open host log using the system default application | Real routing; not exercised |
+| Host version mismatch | Status text and warning symbol; manual Restart requires confirmation | Real; never automatically restarts a live host |
+| Host unreachable / failed / throttled | Status bar text, symbol and detail; Host menu exposes log and retry | Real; shared across windows |
+| App quit / last window close | Flush shell state; detached host and sessions continue | Real; quit exercised for A1 |
 | Cmd-T; tab `+` → New Terminal | `session.create`, select returned session, return from Settings/destinations | Real |
 | Tab `+` search → existing tab | Select session and display its replayed output | Real |
 | Tab `+` agent/browser/emulator/Markdown rows | Visible disabled choices with unavailable tooltips | Stub: M4/M5/WebKit/editor |
@@ -126,3 +136,16 @@ The app used for the earlier tour was no longer running when work resumed; there
 - Evidence: `/tmp/a0/before.png`, `final-restored.png`, `closed-relaunch.png`, `pending-restored.png`, `restarted.png`, `cat-restarted.png`; full logs and fixture states are retained under `/tmp/a0`. No command was typed into another app.
 - A0 adds no core logic/tests. The concurrent H3 worker expanded the suite from 254 to 268 tests. Full results and captured pre-existing/concurrent failures are recorded in `/tmp/a0/report.md`; the full first failure logs were sent to the coordinator.
 - This is a focused state-ownership verification, not a repetition of the full UI-29 tour. Inline rename AX set-value changed the displayed draft but did not commit through synthetic Return, so an actual rename/save round trip remains unverified. All existing quick-command, palette, confirmation, settings and terminal hooks remain connected; their earlier UI-29 verification limits above still apply.
+
+
+## WP-A1 host integration (2026-10-25)
+
+`HostController.swift` owns one process-wide HostLauncher and lifecycle monitor. The bundle resolves `smthzd` using `Bundle.main.url(forAuxiliaryExecutable:)`, with a sibling-binary fallback when unbundled. `package-app.sh` builds both products and copies the host before ad-hoc deep signing, retaining the existing scratch-path, resources and icon compilation behavior.
+
+Minimal hooks outside the primary A1 files: `ShellController.swift` resolves its socket through the shared endpoint configuration; `Slots/StatusBarSlot.swift` forwards lifecycle text/detail/symbol; `StatusBarView.swift` accepts that optional symbol. `SmthzApp.swift` only adds the Host menu command set, and `ShellView.swift` only passes the shared lifecycle status owner to its existing status item.
+
+Focused acceptance evidence and full logs are in `/tmp/a1/`: bundled host executable and deep signature verified; fresh `/tmp/smthz-a1` host answered ping in 0.542 seconds with one matching process; connected status screenshot `connected.png`; the host retained a real `/bin/sleep 300` session after app quit; Stop Host confirmation `stop-confirm.png` listed a live session, and confirmation removed host/child and socket. `SMTHZ_SOCKET=/tmp/a1-private/h.sock` with an absent external host started nothing and disabled lifecycle actions (`private-host-menu.png`). No terminal text was typed into any application.
+
+Test results and concurrent scrollback-test changes are detailed in `/tmp/a1/report.md`; A1 changes no core or test files. These checks do not claim the full M3 verification matrix, a visual mismatch/throttle fixture, or a launchd service.
+
+Final A1 sheet checks additionally verified that Cancel preserved host PID 93500 and sleep PID 94944; confirmed Restart replaced the host with PID 95077 and ended that child; confirmed Stop left no host. See `/tmp/a1/menu-check.log`, `restart-cancel-final.png`, `restart-confirm-final.png`, and `stop-confirm-final.png`. Confirmation refreshes session inventory before presentation and explicitly warns when only a cached inventory is available. Baseline suite run passed 268 tests; subsequent concurrent scrollback changes grew it to 274 with a stale `HostLifecycleTests.swift:172` fixed-size assertion still failing, and one additional transient descriptor assertion in run 4. Full logs were delivered to the coordinator; three final green runs are still required after the concurrent test update.

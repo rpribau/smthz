@@ -13,6 +13,7 @@ esac
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 SCRATCH="${SMTHZ_SCRATCH_PATH:-.build-lunaapp}"
 swift build --configuration "$CONFIG" --scratch-path "$SCRATCH" --product SmthzApp
+swift build --configuration "$CONFIG" --scratch-path "$SCRATCH" --product smthzd
 BUILD_CONFIG="$CONFIG"
 
 APP="$ROOT/build/smthz.app"
@@ -22,6 +23,7 @@ RESOURCES="$CONTENTS/Resources"
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$SCRATCH/$BUILD_CONFIG/SmthzApp" "$MACOS/smthz"
+cp "$SCRATCH/$BUILD_CONFIG/smthzd" "$MACOS/smthzd"
 
 ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/smthz-icon.XXXXXX")"
 ICONSET="$ICON_TMP/icon.iconset"

@@ -50,7 +50,7 @@ struct ShellView: View {
                 ShellLayout(sidebarOpen: $sidebarOpen, rightSidebarOpen: $rightSidebarOpen,
                     sidebar: sidebar, tabs: tabs, content: workspace,
                     right: RightSidebarSlot(isOpen: $rightSidebarOpen, model: model),
-                    status: StatusBarSlot(model: model, goToSession: { select($0) }))
+                    status: StatusBarSlot(model: model, host: HostController.shared, goToSession: { select($0) }))
             }
             }
             .disabled(overlay != nil)

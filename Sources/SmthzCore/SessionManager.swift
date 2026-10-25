@@ -315,8 +315,8 @@ public final class SessionManager: @unchecked Sendable {
         }
     }
 
-    /// Fixed-size ring: magic, capacity, absolute end (all UInt64 big endian),
-    /// followed by capacity bytes. Header commits follow data writes. This is
+    /// Lazily grown ring: magic, capacity, absolute end (all UInt64 big endian),
+    /// followed by up to capacity bytes. Header commits follow data writes. This is
     /// bounded disk replay, not an atomic crash-recovery transaction.
     private final class Scrollback {
         var fd: Int32
@@ -336,7 +336,8 @@ public final class SessionManager: @unchecked Sendable {
             fd = Darwin.open(url.path, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
             guard fd >= 0 else { throw SessionError.scrollbackFailure }
             do {
-                guard ftruncate(fd, off_t(capacity + Self.headerSize)) == 0 else { throw SessionError.scrollbackFailure }
+                // pwrite extends the file as output arrives; a new session only
+                // needs its header. Ring positions and the retention cap stay fixed.
                 try commit()
             } catch {
                 Darwin.close(fd)
@@ -360,9 +361,11 @@ public final class SessionManager: @unchecked Sendable {
                     header[index..<(index + 8)].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
                 }
                 guard words[0] == Self.magic, words[1] > 0, words[1] <= 1_073_741_824,
-                      metadata.st_size == off_t(words[1]) + off_t(Self.headerSize) else {
+                      (metadata.st_size == off_t(min(words[1], words[2])) + off_t(Self.headerSize)
+                       || metadata.st_size == off_t(words[1]) + off_t(Self.headerSize)) else {
                     throw SessionError.scrollbackFailure
                 }
+                // Accept both lazy files and archives pre-sized by older hosts.
                 capacity = Int(words[1])
                 end = words[2]
             } catch {

@@ -65,7 +65,7 @@ final class ShellController {
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let support = ApplicationIdentity.applicationSupportDirectory(home: home)
-        socketPath = ProcessInfo.processInfo.environment["SMTHZ_SOCKET"] ?? support.appending(path: "smthzd.sock").path
+        socketPath = HostController.socketPath
         let arguments = ProcessInfo.processInfo.arguments
         let directory = arguments.firstIndex(of: "-SmthzStateDirectory").flatMap {
             arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil

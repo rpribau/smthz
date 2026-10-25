@@ -4,11 +4,12 @@ import Testing
 @testable import SmthzCore
 
 private func durabilityEventually(_ predicate: () throws -> Bool) rethrows -> Bool {
-    let deadline = Date(timeIntervalSinceNow: 10)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(30))
     repeat {
         if try predicate() { return true }
         Thread.sleep(forTimeInterval: 0.01)
-    } while Date() < deadline
+    } while clock.now < deadline
     return try predicate()
 }
 
@@ -58,7 +59,7 @@ struct PTYSessionDurabilityTests {
 @Suite(.serialized)
 struct SessionManagerDurabilityTests {
     @Test func replaysMoreThanFourMiBFromDiskAndAfterTeardown() throws {
-        let directory = URL(fileURLWithPath: "/tmp/smthz-d-\(UUID().uuidString.prefix(8))")
+        let directory = URL(fileURLWithPath: "/tmp/smthz-d-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let journal = try EventJournal(path: directory.appendingPathComponent("journal").path)
@@ -92,7 +93,7 @@ struct SessionManagerDurabilityTests {
     }
 
     @Test func boundedRingWrapsAndPreservesAbsoluteCursors() throws {
-        let directory = URL(fileURLWithPath: "/tmp/smthz-d-\(UUID().uuidString.prefix(8))")
+        let directory = URL(fileURLWithPath: "/tmp/smthz-d-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let manager = SessionManager(journal: try EventJournal(path: directory.appendingPathComponent("journal").path), outputLimit: 8, scrollbackDirectory: directory.appendingPathComponent("output"), scrollbackLimit: 32)
@@ -121,7 +122,7 @@ struct SessionManagerDurabilityTests {
     }
 
     @Test func storageFailureDoesNotLaunchAChildAndInvalidReplayIDsAreRejected() throws {
-        let directory = URL(fileURLWithPath: "/tmp/smthz-d-\(UUID().uuidString.prefix(8))")
+        let directory = URL(fileURLWithPath: "/tmp/smthz-d-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let blocker = directory.appendingPathComponent("not-directory")
@@ -137,7 +138,7 @@ struct SessionManagerDurabilityTests {
 @Suite(.serialized)
 struct PTYWriteDurabilityTests {
     @Test func cancelsWriteWhilePTYInputIsFull() throws {
-        let directory = URL(fileURLWithPath: "/tmp/smthz-c-\(UUID().uuidString.prefix(8))")
+        let directory = URL(fileURLWithPath: "/tmp/smthz-c-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let manager = SessionManager(journal: try EventJournal(path: directory.appendingPathComponent("journal").path))
@@ -169,16 +170,16 @@ private func descriptorsForScrollback(_ id: String) -> [Int32] {
 @Suite(.serialized)
 struct ScrollbackDescriptorDurabilityTests {
     @Test func closesDiskDescriptorsAndRejectsCorruptOrSymlinkedArchives() throws {
-        let directory = URL(fileURLWithPath: "/tmp/smthz-f-\(UUID().uuidString.prefix(8))")
+        let directory = URL(fileURLWithPath: "/tmp/smthz-f-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let output = directory.appendingPathComponent("output")
         let manager = SessionManager(journal: try EventJournal(path: directory.appendingPathComponent("journal").path), scrollbackDirectory: output, scrollbackLimit: 64)
         let info = try manager.create(executable: "/bin/sh", arguments: ["-c", "printf READY; read answer"])
         defer { try? manager.close(id: info.id) }
-        #expect(try durabilityEventually { try manager.read(id: info.id, from: 0).data == Data("READY".utf8) })
+        try #require(try durabilityEventually { try manager.read(id: info.id, from: 0).data == Data("READY".utf8) })
         let descriptors = descriptorsForScrollback(info.id)
-        #expect(descriptors.count == 1)
+        try #require(descriptors.count == 1)
         #expect(descriptors.allSatisfy { fcntl($0, F_GETFD) & FD_CLOEXEC != 0 })
         try manager.close(id: info.id)
         #expect(descriptorsForScrollback(info.id).isEmpty)

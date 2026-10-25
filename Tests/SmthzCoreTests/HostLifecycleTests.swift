@@ -169,7 +169,8 @@ struct HostLifecycleTests {
         let file = host.directory.appendingPathComponent("scrollback/" + session.id + ".scrollback")
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
-        #expect((attributes[.size] as? NSNumber)?.intValue == 16 * 1_048_576 + 24)
+        #expect((attributes[.size] as? NSNumber)?.intValue == 24 + first.data.count + rest.data.count)
+        #expect((attributes[.size] as? NSNumber)?.intValue ?? Int.max <= 16 * 1_048_576 + 24)
         try client.shutdown()
         #expect(host.stopped(process))
     }
