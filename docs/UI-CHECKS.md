@@ -5,7 +5,7 @@ Baseline after UI wave 2: build OK, 211 tests x3, `Package.swift` unchanged. Scr
 ## Per-change routine
 1. Scope diff against the pre-launch snapshot (`diff -rq Sources.<snap> Sources`), `Package.swift` diff, no `.build-*` left.
 2. `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --scratch-path /tmp/smthz-verify`, then `swift test` x3; compare the count (211).
-3. `SMTHZ_SCRATCH_PATH=/tmp/smthz-verify ./scripts/package-app.sh`; start `/tmp/smthz-verify/debug/smthzd`, create a session with `smthz run -- /bin/zsh -f`, `open build/smthz.app`, `screencapture -x`, read the image. Afterwards `pkill -x SmthzApp; pkill -TERM -x smthzd` and confirm no strays.
+3. `SMTHZ_SCRATCH_PATH=/tmp/smthz-verify ./scripts/package-app.sh`; start `/tmp/smthz-verify/debug/smthzd`, create a session with `smthz run -- /bin/zsh -f`, `open build/smthz.app`, `screencapture -x`, read the image. Afterwards `pkill -f 'smthz.app/Contents/MacOS/smthz$'; pkill -TERM -x smthzd` and confirm no strays.
 4. Never use System Events `keystroke` unless the app is verified frontmost.
 
 ## Visual checklist (compare with docs/UI-SPEC.md)
