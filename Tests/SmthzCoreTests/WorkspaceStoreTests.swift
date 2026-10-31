@@ -3,11 +3,11 @@ import Testing
 @testable import SmthzCore
 
 struct WorkspaceStoreTests {
-    @Test func emptyDatabaseMigratesToV1AndReopeningPreservesRows() throws {
+    @Test func emptyDatabaseMigratesToV2AndReopeningPreservesRows() throws {
         let f = try HostCoreFixture(), path = f.directory.appendingPathComponent("workspace.sqlite").path
         do {
             let store = try WorkspaceStore(path: path)
-            #expect(try store.query("PRAGMA user_version").first?["user_version"] == .integer(1))
+            #expect(try store.query("PRAGMA user_version").first?["user_version"] == .integer(2))
             #expect(try store.query("PRAGMA foreign_keys").first?["foreign_keys"] == .integer(1))
             #expect(try store.query("PRAGMA journal_mode").first?["journal_mode"] == .text("wal"))
             try store.execute("INSERT INTO host_settings VALUES (?,?,?)", [.text("nestWorkspaces"), .text("true"), .real(42)])
@@ -15,7 +15,7 @@ struct WorkspaceStoreTests {
         let reopened = try WorkspaceStore(path: path)
         #expect(try reopened.query("SELECT value_json FROM host_settings").first?["value_json"] == .text("true"))
         let tables = try reopened.query("SELECT name FROM sqlite_master WHERE type='table'")
-        #expect(tables.count == 11)
+        #expect(tables.count == 18)  // 11 v1 + 6 orchestration + sqlite_sequence
     }
     @Test func transactionsRollbackAndConstraintsRejectDanglingRepo() throws {
         let f = try HostCoreFixture(), store = try WorkspaceStore(path: f.directory.appendingPathComponent("w").path)
@@ -46,7 +46,7 @@ struct WorkspaceStoreTests {
     }
     @Test func newerSchemaRefused() throws {
         let f = try HostCoreFixture(), path = f.directory.appendingPathComponent("w").path
-        do { let store = try WorkspaceStore(path: path); try store.execute("PRAGMA user_version=2") }
+        do { let store = try WorkspaceStore(path: path); try store.execute("PRAGMA user_version=3") }
         #expect(throws: (any Error).self) { try WorkspaceStore(path: path) }
     }
     @Test func interruptedStatesAndLineageGuards() throws {

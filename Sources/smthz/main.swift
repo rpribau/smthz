@@ -13,6 +13,7 @@ Usage: smthz --version | --help | paths
        smthz attach <id> [--socket <path>]
        smthz agent list|launch [--agent <id>] [--cwd <dir>] [--prompt <text>] [--draft] [--permission default|auto|bypass] [--socket <path>] [--json]
   smthz job list|get|cancel|wait [--job-id <id>] [--socket <path>] [--json]
+  smthz orchestration run-create|run-use|run-current|run-list|run-show|send|check|reply|inbox|ask|task-create|task-list|task-update|dispatch|dispatch-show|gate-create|gate-resolve|gate-list|reset [--flag value ...] [--json]
   Non-interactive commands accept --json.
 write decodes literal \\n escapes; attach detaches on Ctrl-] and leaves the session running.
 """
@@ -154,6 +155,7 @@ func run() throws {
     }
     if command == "agent" { try AgentCommands.run(arguments: rest, defaultSocket: socket); return }
     if command == "browser" { try runBrowserCommand(args: rest, defaultSocket: socket); return }
+    if command == "orchestration" { try OrchestrationCommands.run(arguments: rest, defaultSocket: socket); return }
     if try CLICommon.dispatch(command: command, arguments: rest, defaultSocket: socket) { return }
     var jsonOutput = false
     guard commands.contains(command) else { throw UsageError(message: "unknown command: \(command)\n\(usage)") }

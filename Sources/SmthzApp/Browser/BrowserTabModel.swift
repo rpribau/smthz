@@ -114,6 +114,7 @@ import WebKit
             config.preferences.isElementFullscreenEnabled = true
             return config
         }()
+        BrowserAutomation.prepare(config)
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         webView.allowsBackForwardNavigationGestures = true
@@ -209,6 +210,7 @@ extension BrowserTab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if response.isForMainFrame { BrowserAutomation.shared.recordDocument(self, response.response) }
         if let http = response.response as? HTTPURLResponse,
            http.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true {
             return .download
@@ -242,6 +244,7 @@ extension BrowserTab: WKNavigationDelegate {
         guard [NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest,
                NSURLAuthenticationMethodNTLM].contains(method) else { return (.performDefaultHandling, nil) }
         if challenge.previousFailureCount > 2 { return (.rejectProtectionSpace, nil) }
+        if challenge.previousFailureCount == 0, let credential = BrowserAutomation.shared.credential(for: self) { return (.useCredential, credential) }
         let space = challenge.protectionSpace
         let origin = "\(space.protocol ?? "https")://\(space.host)\(space.port == 80 || space.port == 443 ? "" : ":\(space.port)")"
         guard let (user, password) = await BrowserDialogRequest.present(on: self, { .auth(origin: origin, realm: space.realm, resume: $0) })

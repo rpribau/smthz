@@ -25,11 +25,17 @@ public final class WorkspaceStore: @unchecked Sendable {
             try execute("PRAGMA journal_mode=WAL")
             try execute("PRAGMA foreign_keys=ON")
             let version = Int(try query("PRAGMA user_version").first?["user_version"]?.integer ?? 0)
-            guard version <= 1 else { throw WorkspaceStoreError.unsupportedVersion(version) }
+            guard version <= 2 else { throw WorkspaceStoreError.unsupportedVersion(version) }
             if version == 0 {
                 try transaction {
                     try execute(Self.schemaV1)
                     try execute("PRAGMA user_version=1")
+                }
+            }
+            if version < 2 {
+                try transaction {
+                    try execute(Orchestration.schemaV2)
+                    try execute("PRAGMA user_version=2")
                 }
             }
         } catch { sqlite3_close(db); db = nil; throw error }

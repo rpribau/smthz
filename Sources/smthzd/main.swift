@@ -70,6 +70,7 @@ do {
                                  scrollbackLimit: 16 * 1_048_576)
     WorktreeRPC.register(on: router, store: store, sessions: manager)
     CleanupRPC.register(on: router, store: store, sessions: manager)
+    OrchestrationRPC.register(on: router, store: store)
     RepoRPC.register(on: router, store: store,
                      liveSessionCWDs: { manager.list().filter(\.running).compactMap(\.cwd) })
     signal(SIGINT, SIG_IGN)

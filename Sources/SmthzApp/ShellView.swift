@@ -77,6 +77,12 @@ struct ShellView: View {
         .background(SmthzRegistryShortcutMonitor(actions: SmthzShellActions(canPerform: canPerform, perform: perform), enabled: overlay == nil && renameID == nil))
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in SmthzKeybindings.shared.updateFocus() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in SmthzKeybindings.shared.reload() }
+        .onReceive(NotificationCenter.default.publisher(for: AttentionModel.openSession)) { note in
+            if let id = note.object as? String { overlay = nil; select(id) }
+        }
+        .onChange(of: onboardingCompleted && settingsPage == nil && overlay == nil && renameID == nil, initial: true) { _, visible in
+            AttentionModel.shared.surfaceVisible = visible
+        }
         .onChange(of: SmthzKeybindings.shared.diagnostics, initial: true) { _, diagnostics in
             if !diagnostics.isEmpty { toast = SmthzToastMessage(title: "Keybinding configuration", description: diagnostics.map(\.message).joined(separator: "\n"), kind: .error) }
         }
