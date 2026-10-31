@@ -6,6 +6,50 @@ The UI deliberately follows Orca's layout and look; the code is a separate Swift
 
 > **Status: early development (version 0.1.0). Not usable as a daily driver.** No milestone in the roadmap is formally accepted. A large part of the UI is visual only.
 
+## Progress toward Orca parity
+
+<!-- PARITY:START -->
+smthz is about 30% of the way to functional parity with Orca 1.4.238 (visual: 25%).
+
+```text
+Functional  ███░░░░░░░ 30%
+Visual      ███░░░░░░░ 25%
+```
+
+| Area | Functional | Visual | Issues |
+|---|---|---|---|
+| Terminal, panes and tabs | 76.59% | 60.71% | [#1](https://github.com/rpribau/smthz/issues/1), [#2](https://github.com/rpribau/smthz/issues/2), [#13](https://github.com/rpribau/smthz/issues/13), [#26](https://github.com/rpribau/smthz/issues/26), [#30](https://github.com/rpribau/smthz/issues/30), [#31](https://github.com/rpribau/smthz/issues/31), [#41](https://github.com/rpribau/smthz/issues/41) |
+| Windows and floating surfaces | 0% | 12.5% | [#16](https://github.com/rpribau/smthz/issues/16), [#22](https://github.com/rpribau/smthz/issues/22), [#31](https://github.com/rpribau/smthz/issues/31) |
+| Projects and worktrees | 77.62% | 50% | [#31](https://github.com/rpribau/smthz/issues/31), [#33](https://github.com/rpribau/smthz/issues/33) |
+| Git and source control | 66.02% | 63.64% | [#3](https://github.com/rpribau/smthz/issues/3), [#31](https://github.com/rpribau/smthz/issues/31), [#34](https://github.com/rpribau/smthz/issues/34) |
+| Explorer, search and file opening | 85.8% | 55.56% | [#1](https://github.com/rpribau/smthz/issues/1), [#16](https://github.com/rpribau/smthz/issues/16), [#31](https://github.com/rpribau/smthz/issues/31), [#35](https://github.com/rpribau/smthz/issues/35) |
+| Editor, markdown, viewers and diffs | 3.33% | 0% | [#1](https://github.com/rpribau/smthz/issues/1), [#2](https://github.com/rpribau/smthz/issues/2), [#3](https://github.com/rpribau/smthz/issues/3) |
+| Agent roster, launch and lifecycle | 46.3% | 55.56% | [#31](https://github.com/rpribau/smthz/issues/31), [#36](https://github.com/rpribau/smthz/issues/36), [#37](https://github.com/rpribau/smthz/issues/37), [#38](https://github.com/rpribau/smthz/issues/38) |
+| Structured agent chat | 12.5% | 50% | [#4](https://github.com/rpribau/smthz/issues/4), [#5](https://github.com/rpribau/smthz/issues/5), [#6](https://github.com/rpribau/smthz/issues/6), [#7](https://github.com/rpribau/smthz/issues/7) |
+| Agent accounts and usage | 0% | 0% | [#8](https://github.com/rpribau/smthz/issues/8) |
+| Session history and memory | 16.67% | 33.33% | [#7](https://github.com/rpribau/smthz/issues/7), [#9](https://github.com/rpribau/smthz/issues/9) |
+| Browser pane and automation | 52.82% | 54.17% | [#10](https://github.com/rpribau/smthz/issues/10), [#11](https://github.com/rpribau/smthz/issues/11), [#12](https://github.com/rpribau/smthz/issues/12), [#13](https://github.com/rpribau/smthz/issues/13), [#31](https://github.com/rpribau/smthz/issues/31) |
+| Orchestration runtime | 23.03% | 0% | [#14](https://github.com/rpribau/smthz/issues/14) |
+| CLI and RPC delivery surfaces | 20.72% | 0% | [#14](https://github.com/rpribau/smthz/issues/14), [#15](https://github.com/rpribau/smthz/issues/15), [#16](https://github.com/rpribau/smthz/issues/16), [#17](https://github.com/rpribau/smthz/issues/17), [#19](https://github.com/rpribau/smthz/issues/19), [#20](https://github.com/rpribau/smthz/issues/20), [#21](https://github.com/rpribau/smthz/issues/21), [#23](https://github.com/rpribau/smthz/issues/23), [#25](https://github.com/rpribau/smthz/issues/25), [#26](https://github.com/rpribau/smthz/issues/26), [#27](https://github.com/rpribau/smthz/issues/27), [#28](https://github.com/rpribau/smthz/issues/28), [#40](https://github.com/rpribau/smthz/issues/40) |
+| Scheduled automations | 0% | 40% | [#15](https://github.com/rpribau/smthz/issues/15) |
+| Providers, tasks and checks | 0% | 9.09% | [#19](https://github.com/rpribau/smthz/issues/19), [#20](https://github.com/rpribau/smthz/issues/20) |
+| Settings panes and search | 14.51% | 17.5% | [#24](https://github.com/rpribau/smthz/issues/24), [#31](https://github.com/rpribau/smthz/issues/31), [#39](https://github.com/rpribau/smthz/issues/39) |
+| Notifications, activity and engagement | 31.85% | 27.78% | [#31](https://github.com/rpribau/smthz/issues/31), [#42](https://github.com/rpribau/smthz/issues/42), [#43](https://github.com/rpribau/smthz/issues/43) |
+| Mobile companion | 0% | 50% | [#17](https://github.com/rpribau/smthz/issues/17), [#32](https://github.com/rpribau/smthz/issues/32) |
+| SSH, remote hosts, ports and VMs | 4.57% | 2.86% | [#16](https://github.com/rpribau/smthz/issues/16), [#17](https://github.com/rpribau/smthz/issues/17), [#18](https://github.com/rpribau/smthz/issues/18), [#44](https://github.com/rpribau/smthz/issues/44) |
+| Skills, plugins, artifacts and sharing | 0% | 0% | [#21](https://github.com/rpribau/smthz/issues/21) |
+| Speech, computer use and emulators | 0% | 0% | [#25](https://github.com/rpribau/smthz/issues/25), [#26](https://github.com/rpribau/smthz/issues/26), [#27](https://github.com/rpribau/smthz/issues/27) |
+| Packaging, updates and diagnostics | 25% | 45.83% | [#28](https://github.com/rpribau/smthz/issues/28), [#36](https://github.com/rpribau/smthz/issues/36) |
+| Onboarding and setup guide | 66.67% | 83.33% | [#19](https://github.com/rpribau/smthz/issues/19), [#20](https://github.com/rpribau/smthz/issues/20), [#31](https://github.com/rpribau/smthz/issues/31), [#45](https://github.com/rpribau/smthz/issues/45) |
+| Shortcuts and menus | 57.55% | 50% | [#24](https://github.com/rpribau/smthz/issues/24), [#31](https://github.com/rpribau/smthz/issues/31), [#39](https://github.com/rpribau/smthz/issues/39) |
+| Persistence, recovery and backup | 45.83% | 0% | [#1](https://github.com/rpribau/smthz/issues/1), [#23](https://github.com/rpribau/smthz/issues/23), [#46](https://github.com/rpribau/smthz/issues/46) |
+| Performance baseline and soak | 0% | 0% | [#29](https://github.com/rpribau/smthz/issues/29) |
+
+Inventory coverage against Orca 1.4.238: every row in PARITY-AUDIT sections 2.1–2.19 has an explicit covered/total functional checklist and an S=1, M=2, L=4 or XL=8 size weight; accepted platform/language exclusions have no weight. Functional area coverage is 100*sum(row weight*covered/total)/sum(row weights), with VISUAL-ONLY and MISSING rows contributing zero. Visual rows score 0 for no corresponding surface, 0.5 for a partial, standalone or GUI-unverified surface, and 1 for an implemented representative surface with recorded GUI evidence; backend-only rows score zero because the shared-weight schema has no visual-N/A field. These measure this declared inventory, not pixel fidelity or complete API/argument compatibility; current code/tests/reference were inspected, while execution evidence is explicitly attributed to UI-WIRING and prior runs. Areas partition the inventory into 26 groups; percentages are rounded to two decimals and overall values must be computed as weight-weighted means.
+
+Last updated: 2026-10-31
+<!-- PARITY:END -->
+
 ## What exists today
 
 Working and tested (unit tests with real PTYs, sockets, SQLite and Git; see the test suite in `Tests/`):

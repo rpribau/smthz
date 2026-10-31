@@ -1,0 +1,351 @@
+{
+  "updated": "2026-10-31",
+  "method": "Inventory coverage against Orca 1.4.238: every row in PARITY-AUDIT sections 2.1\u20132.19 has an explicit covered/total functional checklist and an S=1, M=2, L=4 or XL=8 size weight; accepted platform/language exclusions have no weight. Functional area coverage is 100*sum(row weight*covered/total)/sum(row weights), with VISUAL-ONLY and MISSING rows contributing zero. Visual rows score 0 for no corresponding surface, 0.5 for a partial, standalone or GUI-unverified surface, and 1 for an implemented representative surface with recorded GUI evidence; backend-only rows score zero because the shared-weight schema has no visual-N/A field. These measure this declared inventory, not pixel fidelity or complete API/argument compatibility; current code/tests/reference were inspected, while execution evidence is explicitly attributed to UI-WIRING and prior runs. Areas partition the inventory into 26 groups; percentages are rounded to two decimals and overall values must be computed as weight-weighted means.",
+  "audit": "docs/PARITY-AUDIT.md",
+  "areas": [
+    {
+      "id": "terminal",
+      "name": "Terminal, panes and tabs",
+      "weight": 42,
+      "functional": 76.59,
+      "visual": 60.71,
+      "issues": [
+        1,
+        2,
+        13,
+        26,
+        30,
+        31,
+        41
+      ],
+      "notes": "Streaming/OSC52/T1 real; imports, shell integration and newer GUI checks remain (N09)."
+    },
+    {
+      "id": "windows",
+      "name": "Windows and floating surfaces",
+      "weight": 8,
+      "functional": 0,
+      "visual": 12.5,
+      "issues": [
+        16,
+        22,
+        31
+      ],
+      "notes": "Shared AppModel; no independent windows or floating panel."
+    },
+    {
+      "id": "projects",
+      "name": "Projects and worktrees",
+      "weight": 28,
+      "functional": 77.62,
+      "visual": 50,
+      "issues": [
+        31,
+        33
+      ],
+      "notes": "Host lifecycle and app paths real; navigation/groups/cleanup integration remain (N01)."
+    },
+    {
+      "id": "git",
+      "name": "Git and source control",
+      "weight": 11,
+      "functional": 66.02,
+      "visual": 63.64,
+      "issues": [
+        3,
+        31,
+        34
+      ],
+      "notes": "Writes tested and Stage\u2192Commit\u2192Push seen; base/squash/AI attribution remain (N02)."
+    },
+    {
+      "id": "files",
+      "name": "Explorer, search and file opening",
+      "weight": 9,
+      "functional": 85.8,
+      "visual": 55.56,
+      "issues": [
+        1,
+        16,
+        31,
+        35
+      ],
+      "notes": "Real host file ops/search; external editor/terminal actions remain (N03)."
+    },
+    {
+      "id": "editor",
+      "name": "Editor, markdown, viewers and diffs",
+      "weight": 24,
+      "functional": 3.33,
+      "visual": 0,
+      "issues": [
+        1,
+        2,
+        3
+      ],
+      "notes": "Git diff text only; no editing/viewer surface."
+    },
+    {
+      "id": "agents",
+      "name": "Agent roster, launch and lifecycle",
+      "weight": 18,
+      "functional": 46.3,
+      "visual": 55.56,
+      "issues": [
+        31,
+        36,
+        37,
+        38
+      ],
+      "notes": "45 agents, launch/hooks/live UI real; packaged hooks/defaults/dashboard/teams remain (N04\u2013N06)."
+    },
+    {
+      "id": "chat",
+      "name": "Structured agent chat",
+      "weight": 8,
+      "functional": 12.5,
+      "visual": 50,
+      "issues": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "notes": "Codex core fake-tested; transcript view standalone, no reachable chat."
+    },
+    {
+      "id": "accounts",
+      "name": "Agent accounts and usage",
+      "weight": 6,
+      "functional": 0,
+      "visual": 0,
+      "issues": [
+        8
+      ],
+      "notes": "No provider account/usage backend."
+    },
+    {
+      "id": "history",
+      "name": "Session history and memory",
+      "weight": 6,
+      "functional": 16.67,
+      "visual": 33.33,
+      "issues": [
+        7,
+        9
+      ],
+      "notes": "JSONL reader/decoders real; catalog/FTS/resume/memory absent."
+    },
+    {
+      "id": "browser",
+      "name": "Browser pane and automation",
+      "weight": 24,
+      "functional": 52.82,
+      "visual": 54.17,
+      "issues": [
+        10,
+        11,
+        12,
+        13,
+        31
+      ],
+      "notes": "79 executable commands, 54 full; profiles CLI works, import/UI/splits/design/reductions remain."
+    },
+    {
+      "id": "orchestration",
+      "name": "Orchestration runtime",
+      "weight": 22,
+      "functional": 23.03,
+      "visual": 0,
+      "issues": [
+        14
+      ],
+      "notes": "19 CLI verbs and tested DAG/mail store; no workers/coordinator/federation/UI."
+    },
+    {
+      "id": "cli",
+      "name": "CLI and RPC delivery surfaces",
+      "weight": 54,
+      "functional": 20.72,
+      "visual": 0,
+      "issues": [
+        14,
+        15,
+        16,
+        17,
+        19,
+        20,
+        21,
+        23,
+        25,
+        26,
+        27,
+        28,
+        40
+      ],
+      "notes": "120/287 mapped callable CLI paths incl 25 reduced browser; 165/754 mapped RPC lower bound (124 exact-name + 41 renamed/subset) (N08)."
+    },
+    {
+      "id": "automations",
+      "name": "Scheduled automations",
+      "weight": 5,
+      "functional": 0,
+      "visual": 40,
+      "issues": [
+        15
+      ],
+      "notes": "Page stub; scheduler/history absent."
+    },
+    {
+      "id": "integrations",
+      "name": "Providers, tasks and checks",
+      "weight": 22,
+      "functional": 0,
+      "visual": 9.09,
+      "issues": [
+        19,
+        20
+      ],
+      "notes": "Tasks/Checks empty-state shells, no provider clients."
+    },
+    {
+      "id": "settings",
+      "name": "Settings panes and search",
+      "weight": 40,
+      "functional": 14.51,
+      "visual": 17.5,
+      "issues": [
+        24,
+        31,
+        39
+      ],
+      "notes": "10/39 dedicated pane bodies, 9 with some real behavior; no complete global row/value search."
+    },
+    {
+      "id": "attention",
+      "name": "Notifications, activity and engagement",
+      "weight": 9,
+      "functional": 31.85,
+      "visual": 27.78,
+      "issues": [
+        31,
+        42,
+        43
+      ],
+      "notes": "Transition rules/Dock/notifications wired; feed unreachable, bell/tray/engagement remain (N10/N11)."
+    },
+    {
+      "id": "mobile",
+      "name": "Mobile companion",
+      "weight": 8,
+      "functional": 0,
+      "visual": 50,
+      "issues": [
+        17,
+        32
+      ],
+      "notes": "Deferred companion; placeholder receives zero functional credit."
+    },
+    {
+      "id": "remote",
+      "name": "SSH, remote hosts, ports and VMs",
+      "weight": 35,
+      "functional": 4.57,
+      "visual": 2.86,
+      "issues": [
+        16,
+        17,
+        18,
+        44
+      ],
+      "notes": "Loopback WebSocket only; SSH/Linux/auth-relay/ports/VM services absent (N12)."
+    },
+    {
+      "id": "library",
+      "name": "Skills, plugins, artifacts and sharing",
+      "weight": 22,
+      "functional": 0,
+      "visual": 0,
+      "issues": [
+        21
+      ],
+      "notes": "No product services or library UI."
+    },
+    {
+      "id": "tools",
+      "name": "Speech, computer use and emulators",
+      "weight": 12,
+      "functional": 0,
+      "visual": 0,
+      "issues": [
+        25,
+        26,
+        27
+      ],
+      "notes": "No helper/model/emulator services."
+    },
+    {
+      "id": "distribution",
+      "name": "Packaging, updates and diagnostics",
+      "weight": 12,
+      "functional": 25,
+      "visual": 45.83,
+      "issues": [
+        28,
+        36
+      ],
+      "notes": "Ad-hoc bundle only; dedicated hook CLI/signing/updates/diagnostics absent."
+    },
+    {
+      "id": "onboarding",
+      "name": "Onboarding and setup guide",
+      "weight": 3,
+      "functional": 66.67,
+      "visual": 83.33,
+      "issues": [
+        19,
+        20,
+        31,
+        45
+      ],
+      "notes": "Real step gate/theme/permission route; agent/provider/checklist steps stub (N13)."
+    },
+    {
+      "id": "shortcuts",
+      "name": "Shortcuts and menus",
+      "weight": 8,
+      "functional": 57.55,
+      "visual": 50,
+      "issues": [
+        24,
+        31,
+        39
+      ],
+      "notes": "91 ids, 56 action paths; registry availability/overrides diverge (N07)."
+    },
+    {
+      "id": "persistence",
+      "name": "Persistence, recovery and backup",
+      "weight": 16,
+      "functional": 45.83,
+      "visual": 0,
+      "issues": [
+        1,
+        23,
+        46
+      ],
+      "notes": "Stores real; host recovery/idempotency/editor writes/backup remain (N14)."
+    },
+    {
+      "id": "performance",
+      "name": "Performance baseline and soak",
+      "weight": 4,
+      "functional": 0,
+      "visual": 0,
+      "issues": [
+        29
+      ],
+      "notes": "No Orca baseline; no comparative performance claim."
+    }
+  ]
+}
