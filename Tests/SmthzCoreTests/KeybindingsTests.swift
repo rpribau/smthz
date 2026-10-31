@@ -67,6 +67,8 @@ import Testing
         #expect(!KeybindingAction.browserReload.available)
         #expect(!KeybindingAction.editorSave.available)
         #expect(KeybindingAction.tabReopenClosed.available)
+        #expect(KeybindingAction.terminalSwitchInputSource.available)
+        #expect(KeybindingRegistry.defaults.chords(for: .terminalSwitchInputSource).isEmpty)
         #expect(KeybindingAction.appSettings.definition.conflictGroup == "menu")
         #expect(KeybindingRegistry.defaults.chords(for: .appSettings).isEmpty)
         #expect(KeybindingRegistry.defaults.chords(for: .workspaceCreate).map(\.formatted) == ["Mod+Shift+N"])

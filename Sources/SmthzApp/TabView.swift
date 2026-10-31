@@ -93,6 +93,7 @@ struct ShellTabView: View {
                 Text(tab.title).lineLimit(1).truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            AgentStatusBadge(sessionID: tab.id)
             if tab.expanded, let collapsePane {
                 Button(action: collapsePane) {
                     SmthzIcon.view(.minimize2, size: 12).frame(width: 16, height: 16)

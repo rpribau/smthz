@@ -5,8 +5,7 @@ import SwiftTerm
 /// Persisted settings contract for UI-29 and terminal surfaces. Read a fresh snapshot on defaults
 /// changes, then call apply(to:isActive:) from makeNSView/updateNSView after the base theme.
 /// Padding, line height, copy-on-select and split metrics need terminal/split integration; their
-/// controls remain disabled rather than saving preferences that have no effect. Surfaces do not
-/// yet apply the snapshot when they are created: changes reach terminals open at change time.
+/// controls remain disabled rather than saving preferences that have no effect.
 @MainActor
 struct TerminalSettingsModel {
     enum Key {
@@ -98,16 +97,17 @@ struct TerminalSettingsModel {
         case (_, false): terminal.setCursorStyle(.steadyBlock)
         default: terminal.setCursorStyle(.blinkBlock)
         }
-        terminal.optionAsMetaKey = optionAsAlt != "off"
+        terminal.optionAsMetaKey = TerminalOptionKey.sendsAlt(defaults)
         terminal.changeScrollback(scrollbackRows)
         terminal.alphaValue = isActive ? 1 : inactiveOpacity
     }
 
-    /// Immediate changes for already mounted terminals; UI-29 must also apply the snapshot when
-    /// constructing/revealing a terminal, so new sessions and restored windows inherit settings.
+    /// Immediate changes for mounted terminals; creation applies the same snapshot.
     func applyToOpenTerminals() {
         func visit(_ view: NSView) {
-            if let terminal = view as? TerminalView { apply(to: terminal) }
+            if let terminal = view as? TerminalView {
+                apply(to: terminal, isActive: (terminal.superview as? TerminalContainerView)?.isActive ?? true)
+            }
             for child in view.subviews { visit(child) }
         }
         for window in NSApp.windows {

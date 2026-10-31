@@ -13,6 +13,8 @@ struct SettingsView: View {
     var initialPage = "appearance"
     @State private var selection = "appearance"
     @State private var search = ""
+    @State private var loadedProjects: [SettingsProjectItem] = []
+    private var allProjects: [SettingsProjectItem] { projects.isEmpty ? loadedProjects : projects }
 
     private var query: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var visibleGroups: [SettingsGroup] {
@@ -20,7 +22,7 @@ struct SettingsView: View {
     }
     private var searchMiss: Bool {
         !query.isEmpty && visibleGroups.isEmpty
-            && !projects.contains { $0.name.localizedCaseInsensitiveContains(query) }
+            && !allProjects.contains { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
     var body: some View {
@@ -37,7 +39,7 @@ struct SettingsView: View {
             .background(SmthzTheme.card)
             .overlay(alignment: .bottom) { SmthzTheme.border.frame(height: 1) }
             HStack(spacing: 0) {
-                SettingsSidebar(selection: $selection, search: $search, projects: projects,
+                SettingsSidebar(selection: $selection, search: $search, projects: allProjects,
                                 shownConditionalPages: shownConditionalPages, onBack: onBack)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
@@ -60,15 +62,16 @@ struct SettingsView: View {
             }
         }
         .onAppear { selection = initialPage }
+        .task { if projects.isEmpty { loadedProjects = await settingsLoadProjects(socketPath: model.socketPath) } }
         .background(SmthzTheme.background)
         .foregroundStyle(SmthzTheme.foreground)
     }
 
     @ViewBuilder private var content: some View {
         if selection.hasPrefix("project:") {
-            let name = projects.first { "project:\($0.id)" == selection }?.name ?? "Project"
-            SettingsSectionHeader(title: name, description: "Settings for this project.")
-            SettingsUnavailableBody()
+            let project = allProjects.first { "project:\($0.id)" == selection }
+            SettingsSectionHeader(title: project?.name ?? "Project", description: "Settings for this project.")
+            if let project { RepositorySettingsPane(repoID: project.id, socketPath: model.socketPath) }
         } else if let page = SettingsGroup.page(id: selection) {
             SettingsSectionHeader(title: page.title, badge: page.badge, description: page.description)
             pane(for: page)
@@ -80,6 +83,12 @@ struct SettingsView: View {
         case "terminal": TerminalSettingsPane(model: model)
         case "appearance": AppearancePane(sidebarOpen: $sidebarOpen, rightSidebarOpen: $rightSidebarOpen)
         case "shortcuts": ShortcutsPane(settingsSearch: search)
+        case "general": GeneralSettingsPane(store: HostSettingsStore(socketPath: model.socketPath))
+        case "git": GitSettingsPane(store: HostSettingsStore(socketPath: model.socketPath))
+        case "quick-commands": QuickCommandsSettingsPane()
+        case "agents": AgentsSettingsPane(socketPath: model.socketPath)
+        case "privacy": PrivacySettingsPane()
+        case "notifications": NotificationsSettingsPane()
         default: SettingsUnavailableBody()
         }
     }

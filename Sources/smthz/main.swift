@@ -153,6 +153,7 @@ func run() throws {
         return
     }
     if command == "agent" { try AgentCommands.run(arguments: rest, defaultSocket: socket); return }
+    if command == "browser" { try runBrowserCommand(args: rest, defaultSocket: socket); return }
     if try CLICommon.dispatch(command: command, arguments: rest, defaultSocket: socket) { return }
     var jsonOutput = false
     guard commands.contains(command) else { throw UsageError(message: "unknown command: \(command)\n\(usage)") }

@@ -65,7 +65,7 @@ struct TabStripView: View {
             HStack(spacing: 0) {
                 scrollingTabs(tabWidth: tabWidth, showChevrons: geometry.size.width >= 260)
                     .frame(maxWidth: CGFloat(tabs.count) * tabWidth + CGFloat(groups.count) * 100)
-                SmthzTabCreateMenu(actions: createActions, tabs: tabs, select: select)
+                SmthzTabCreateMenu(actions: AgentLauncher.actions(replacing: createActions, cwd: tabs.first(where: \.active)?.cwd), tabs: tabs, select: select)
                 .frame(width: 28, height: 28)
                 .foregroundStyle(SmthzTheme.mutedForeground)
                 .background(plusHovered ? SmthzTheme.accent.opacity(0.5) : .clear,
@@ -116,6 +116,7 @@ struct TabStripView: View {
             .onHover { hovered = $0 }
         }
         .frame(height: SmthzMetrics.tabStripHeight)
+        .agentTabSelection(tabIDs: tabs.map(\.id), select: select)
         .alert("Rename Group", isPresented: Binding(get: { renameGroupID != nil }, set: { if !$0 { renameGroupID = nil } })) {
             TextField("Group name", text: $groupName)
             Button("Cancel", role: .cancel) { renameGroupID = nil }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// VISUAL-ONLY: stub data until agents history backend
+// Live section is real (AG4, agent.status.list). VISUAL-ONLY: session history below stays stub data until the agents history backend.
 struct AgentsPanel: View {
     struct Session: Identifiable {
         let id: String
@@ -72,6 +72,7 @@ struct AgentsPanel: View {
                 }
             }
             .padding(8)
+            liveSection
             HStack {
                 Text(query.isEmpty ? "\(filtered.count) sessions" : "\(filtered.count) of \(sessions.count) sessions")
                 Spacer(minLength: 0)
@@ -111,6 +112,44 @@ struct AgentsPanel: View {
             }
         }
         .foregroundStyle(SmthzTheme.foreground).background(SmthzTheme.sidebar)
+    }
+
+    @ViewBuilder private var liveSection: some View {
+        let live = AgentStatusModel.shared
+        if !live.agentSessionIDs.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Live").font(SmthzFont.ui(size: 11, weight: .medium))
+                    .foregroundStyle(SmthzTheme.mutedForeground).padding(.horizontal, 8)
+                ForEach(live.agentSessionIDs, id: \.self) { id in liveRow(id, live) }
+            }
+            .padding(.horizontal, 6).padding(.bottom, 6)
+        }
+    }
+
+    private func liveRow(_ id: String, _ live: AgentStatusModel) -> some View {
+        let row = live.status(id)
+        // Not a Button: the nested restart chip must receive its own clicks.
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                AgentStateIcon(state: live.exited(id) ? "idle" : row?.state ?? "idle")
+                Text(live.agentName(id)).font(SmthzFont.ui(size: 12)).lineLimit(1)
+                Spacer(minLength: 0)
+                if live.exited(id) { AgentRestartChip(sessionID: id) }
+                else if let row { Text(AgentStatusBadge.label(row)).font(SmthzFont.ui(size: 10)).foregroundStyle(SmthzTheme.mutedForeground) }
+            }
+            if let tool = row?.toolName {
+                Text("Tool: \(tool)" + (row?.toolInputPreview.map { " · \($0)" } ?? ""))
+                    .font(SmthzFont.ui(size: 11)).foregroundStyle(SmthzTheme.mutedForeground).lineLimit(1)
+            }
+            if let prompt = row?.prompt {
+                Text(prompt).font(SmthzFont.ui(size: 11)).foregroundStyle(SmthzTheme.mutedForeground).lineLimit(2)
+            }
+        }
+        .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        .background(SmthzTheme.card, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle()).onTapGesture { live.pendingSelection = id }
+        .accessibilityElement(children: .contain).accessibilityLabel("Agent \(live.agentName(id))")
+        .accessibilityAction(named: "Show tab") { live.pendingSelection = id }
     }
 
     private var viewOptions: some View {

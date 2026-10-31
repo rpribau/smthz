@@ -81,7 +81,7 @@ struct WorkspaceCardView: View {
 
     private var cardSurface: some View {
         HStack(alignment: .top, spacing: 4) {
-            SmthzWorkspaceStatusSlot(data: data, markRead: actions.setUnread.map { callback in { callback(false) } })
+            SmthzWorkspaceStatusSlot(data: AgentStatusModel.shared.decorate(data, root: directory?.path), markRead: actions.setUnread.map { callback in { callback(false) } })
             VStack(alignment: .leading, spacing: 2) {
                 titleRow
                 if hasMeta { metaRow }

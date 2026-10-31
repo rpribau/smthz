@@ -49,7 +49,7 @@ final class ShellController {
     var actionError: String?
     var workspacePinned = false
     var workspaceUnread = false
-    var terminalFontSize: Double = 14
+    var terminalFontSize: Double = TerminalSettingsModel().fontSize
     private(set) var creatingShell = false
     private var ids = UUIDShellIDSource()
     private let executor: ShellEffectExecutor

@@ -119,6 +119,33 @@ public final class HostClient {
 
     public func disconnect() { transport.close() }
 
+    public func browser(_ request: BrowserRequest, requestID: String = RequestID.generate().rawValue,
+                        timeoutMilliseconds: Int = 15_000) throws -> BrowserResult {
+        struct Reply: Decodable { let result: BrowserResult }
+        let reply: Reply = try callWithDetail(method: request.method, params: request,
+            requestID: requestID, timeoutMilliseconds: timeoutMilliseconds)
+        return reply.result
+    }
+
+    /// Owns two authenticated connections: host-to-app command stream and app-to-host replies.
+    public func registerBrowserProvider() throws -> HostBrowserProvider {
+        let stream = try HostClient(socketPath: socketPath, capabilityTokenPath: capabilityTokenPath)
+        do {
+            let replies = try HostClient(socketPath: socketPath, capabilityTokenPath: capabilityTokenPath)
+            do {
+                struct Registration: Decodable { let credential: String }
+                let registration: Registration = try stream.callWithDetail(method: "browser.provider.register", params: [String: String]())
+                return HostBrowserProvider(stream: stream, replies: replies, providerID: registration.credential)
+            } catch { replies.disconnect(); throw error }
+        } catch { stream.disconnect(); throw error }
+    }
+
+    fileprivate func receiveBrowserCommand() throws -> HostBrowserCommand {
+        try JSONDecoder().decode(HostBrowserCommand.self, from: transport.receive())
+    }
+
+    fileprivate func interruptBrowserProvider() { transport.interrupt() }
+
     public static let maximumBufferedStreamFrames = 8
 
     /// Owns a separate authenticated socket, leaving writes/resizes responsive.
@@ -306,8 +333,9 @@ public final class HostClient {
         let request = RPCEnvelope(version: RPCEnvelope.currentVersion, requestID: requestID,
                                   method: method, payload: params, authorization: credential,
                                   timeoutMilliseconds: timeoutMilliseconds)
+        let maximumTimeout = method.hasPrefix("browser.") ? HostService.maximumBrowserTimeoutMilliseconds : HostService.maximumTimeoutMilliseconds
         let response = try JSONDecoder().decode(RPCEnvelope.self,
-            from: transport.request(JSONEncoder().encode(request), timeout: Double(max(1, min(timeoutMilliseconds, 30_000))) / 1000 + 1))
+            from: transport.request(JSONEncoder().encode(request), timeout: Double(max(1, min(timeoutMilliseconds, maximumTimeout))) / 1000 + 1))
         guard response.version == request.version, response.requestID == request.requestID,
               response.method == request.method else { throw HostClientError.invalidResponse }
         return response.payload
@@ -379,4 +407,39 @@ public final class HostClient {
         struct Params: Encodable {}
         return try call(method: "session.list", params: Params())
     }
+}
+
+public struct HostBrowserCommand: Codable, Sendable {
+    public let deliveryID: String
+    public let requestID: String
+    public let request: BrowserRequest
+}
+
+/// Receive and reply calls are serialized by the provider owner; interrupt may run on another thread.
+public final class HostBrowserProvider {
+    private let stream: HostClient
+    private let replies: HostClient
+    private let providerID: String
+    fileprivate init(stream: HostClient, replies: HostClient, providerID: String) {
+        self.stream = stream; self.replies = replies; self.providerID = providerID
+    }
+    public func receive() throws -> HostBrowserCommand { try stream.receiveBrowserCommand() }
+    public func reply(to command: HostBrowserCommand, result: BrowserResult) throws {
+        let value = try JSONDecoder().decode(HostJSON.self, from: JSONEncoder().encode(result))
+        try send(command, fields: ["result": value])
+    }
+    public func reply(to command: HostBrowserCommand, error: HostRPCError) throws {
+        var fields: [String: HostJSON] = ["error": .string(error.code)]
+        if let detail = error.detail { fields["detail"] = .string(detail) }
+        try send(command, fields: fields)
+    }
+    private func send(_ command: HostBrowserCommand, fields: [String: HostJSON]) throws {
+        var params = fields
+        params["providerID"] = .string(providerID)
+        params["deliveryID"] = .string(command.deliveryID)
+        let _: HostAcknowledgement = try replies.callWithDetail(method: "browser.provider.reply", params: params)
+    }
+    public func interrupt() { stream.interruptBrowserProvider() }
+    public func disconnect() { stream.disconnect(); replies.disconnect() }
+    deinit { disconnect() }
 }

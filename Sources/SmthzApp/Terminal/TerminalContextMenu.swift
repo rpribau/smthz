@@ -3,7 +3,7 @@ import AppKit
 /// Native terminal and pane actions, routed to the owning pane.
 @MainActor
 final class SmthzTerminalContextMenu: NSObject {
-    enum Action: Int { case quickCommands, copy, selectAll, paste, copyTerminalID, copyPaneID, clear, reset, splitRight, splitDown, equalize, expand, setTitle }
+    enum Action: Int { case quickCommands, copy, selectAll, paste, copyTerminalID, copyPaneID, clear, reset, splitRight, splitDown, equalize, expand, setTitle, copyContext }
     var perform: (Action) -> Void
     var runQuickCommand: (String) -> Void = { _ in }
 
@@ -13,6 +13,7 @@ final class SmthzTerminalContextMenu: NSObject {
         let menu = NSMenu()
         menu.autoenablesItems = false
         add("Copy", icon: "copy", action: .copy, key: "c", enabled: canCopy, to: menu)
+        add("Copy Context", icon: "copy", action: .copyContext, to: menu)
         add("Select All", icon: "text-select", action: .selectAll, key: "a", to: menu)
         add("Paste", icon: "clipboard", action: .paste, key: "v", enabled: canPaste, to: menu)
         let quick = NSMenuItem(title: "Quick Commands", action: nil, keyEquivalent: "")

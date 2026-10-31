@@ -39,6 +39,10 @@ private actor TerminalTransport {
 
     func write(id: String, data: Data) throws { try perform { _ = try $0.write(id: id, data: data) } }
 
+    func directory(id: String) throws -> String? {
+        try perform { try $0.list().sessions.first(where: { $0.id == id })?.cwd }
+    }
+
     func resize(id: String, rows: Int, cols: Int) throws {
         try perform { _ = try $0.resize(id: id, rows: rows, cols: cols) }
     }
@@ -71,11 +75,14 @@ private final class FocusingTerminalView: TerminalView {
     var clearScreen: (() -> Void)?
     var makeContextMenu: (() -> NSMenu)?
     var onFocus: (() -> Void)?
+    var openFileLink: ((TerminalFileLink) -> Bool)?
     /// Set only while replayed log bytes are parsed (synchronously, on the main thread). The
     /// emulator then answers queries (DA, DSR, DECRQM) that a program asked long ago; those
     /// answers must not reach the shell, where they would show up as typed text.
     nonisolated(unsafe) var dropTerminalReplies = false
     private var shortcutMonitor: Any?
+    private var inputSourceKey: UInt16?
+    private var clickedFileLink = false
 
     nonisolated override func send(source: Terminal, data: ArraySlice<UInt8>) {
         if dropTerminalReplies { return }
@@ -90,7 +97,7 @@ private final class FocusingTerminalView: TerminalView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
-        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             let handled = MainActor.assumeIsolated {
                 guard let self, self.window?.firstResponder === self else { return false }
                 return self.handleShortcut(event)
@@ -101,12 +108,70 @@ private final class FocusingTerminalView: TerminalView {
 
     override func mouseDown(with event: NSEvent) {
         onFocus?()
+        if event.modifierFlags.contains(.command), let link = fileLink(at: event), openFileLink?(link) == true {
+            clickedFileLink = true
+            return
+        }
         super.mouseDown(with: event)
     }
 
+    override func mouseUp(with event: NSEvent) {
+        if clickedFileLink { clickedFileLink = false; return }
+        super.mouseUp(with: event)
+    }
+
+    private func fileLink(at event: NSEvent) -> TerminalFileLink? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point), let snapshot = terminalContentSnapshot(region: .viewport) else { return nil }
+        let dimensions = snapshot.inputState.dimensions
+        guard dimensions.cols > 0, dimensions.rows > 0 else { return nil }
+        // Use the emulator's actual cell metrics, including its pixel rounding.
+        let cellHeight = getOptimalFrameSize().height / CGFloat(dimensions.rows)
+        let scroller = subviews.compactMap { $0 as? NSScroller }.first
+        let reserved = scrollerStyle == .legacy && scroller?.isHidden == false
+            ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+        let cellWidth = (getOptimalFrameSize().width - reserved) / CGFloat(dimensions.cols)
+        guard cellWidth > 0, cellHeight > 0 else { return nil }
+        let row = Int((bounds.maxY - point.y) / cellHeight)
+        let col = Int((point.x - bounds.minX) / cellWidth)
+        guard snapshot.rows.indices.contains(row), col >= 0, col < dimensions.cols else { return nil }
+        // Join soft wraps so a long path remains clickable after wrapping or resizing.
+        // shortcut: BiDi visual reordering needs SwiftTerm to expose its visual-to-logical hit map.
+        var first = row
+        while first > 0 && snapshot.rows[first].isWrapped { first -= 1 }
+        var last = row
+        while last + 1 < snapshot.rows.count && snapshot.rows[last + 1].isWrapped { last += 1 }
+        var text = ""
+        var offset = 0
+        for index in first...last {
+            for (column, cell) in snapshot.rows[index].cells.enumerated() {
+                if index == row && column == col { offset = text.utf16.count }
+                if cell.width > 0 { text += cell.text.isEmpty ? " " : cell.text }
+            }
+        }
+        return TerminalFileLink.detect(in: text).first { NSLocationInRange(offset, $0.range) }
+    }
+
     private func handleShortcut(_ event: NSEvent) -> Bool {
+        if event.type == .keyUp {
+            guard inputSourceKey == event.keyCode else { return false }
+            inputSourceKey = nil
+            return true
+        }
         if SmthzKeybindings.shared.matches(event, action: .terminalSearch) { showFind?(); return true }
         if SmthzKeybindings.shared.matches(event, action: .terminalClear) { clearScreen?(); return true }
+        if let chord = SmthzKeybindings.chord(event),
+           SmthzKeybindings.shared.registry.chords(for: .terminalSwitchInputSource).contains(chord) {
+            inputSourceKey = event.keyCode
+            if event.isARepeat { return true }
+            // Native OS shortcuts are handled before AppKit; custom chords also stay out of the PTY.
+            // shortcut: custom bindings cycle AppKit's source order, not macOS's last-used order.
+            if let context = inputContext, let sources = context.keyboardInputSources, !sources.isEmpty {
+                let current = sources.firstIndex(of: context.selectedKeyboardInputSource ?? "") ?? -1
+                context.selectedKeyboardInputSource = sources[(current + 1) % sources.count]
+            }
+            return true
+        }
         return false
     }
 
@@ -165,14 +230,17 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     private var outputTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
     private var inputSourceObserver: NSObjectProtocol?
+    var shellFontSize: CGFloat
 
     init(sessionID: String, socketPath: String, fontSize: CGFloat, initialGrid: PaneGrid? = nil) {
         self.sessionID = sessionID
+        shellFontSize = fontSize
         transport = TerminalTransport(socketPath: socketPath)
         (commands, commandSink) = AsyncStream.makeStream(of: TerminalCommand.self)
         view = FocusingTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         super.init()
-        view.font = TerminalTheme.font(size: fontSize)
+        TerminalSettingsModel().apply(to: view)
+        view.font = NSFont(descriptor: view.font.fontDescriptor, size: fontSize) ?? view.font
         if let initialGrid {
             grid = (rows: initialGrid.rows, cols: initialGrid.cols)
             view.resize(cols: initialGrid.cols, rows: initialGrid.rows)
@@ -186,6 +254,13 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
             MainActor.assumeIsolated { self?.view.optionAsMetaKey = TerminalOptionKey.sendsAlt() }
         }
         if let terminal = view as? FocusingTerminalView {
+            terminal.openFileLink = { [weak self] link in
+                guard let self, let url = link.resolvedURL(cwd: self.directory,
+                    home: FileManager.default.homeDirectoryForCurrentUser.path),
+                    FileManager.default.fileExists(atPath: url.path) else { return false }
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                return true
+            }
             terminal.onFocus = { [weak self] in self?.onFocus() }
             terminal.showFind = { [weak self] in self?.showingFind = true }
             terminal.clearScreen = { [weak self] in self?.clearScreen() }
@@ -235,6 +310,10 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
         let id = sessionID
         let transport = transport
         outputTask = Task { [weak self] in
+            if self?.directory == nil, let directory = try? await transport.directory(id: id) {
+                self?.directory = directory
+                self?.onDirectoryChange(directory)
+            }
             while !Task.isCancelled {
                 do {
                     guard let cursor = self?.cursor else { return }
@@ -301,6 +380,14 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
         case .quickCommands:
             NotificationCenter.default.post(name: .init("smthz.terminal.quickCommands"), object: sessionID)
         case .copy: view.copy(self)
+        case .copyContext:
+            guard let snapshot = view.terminalContentSnapshot(region: .history(maximumScrollbackRows: 800)) else { return }
+            var rows: [String] = []
+            for row in snapshot.rows {
+                if row.isWrapped && !rows.isEmpty { rows[rows.count - 1] += row.text }
+                else { rows.append(row.text) }
+            }
+            if let text = TerminalContext.format(rows: rows) { copyID(text) }
         case .selectAll: view.selectAll(nil)
         case .paste: view.paste(self)
         case .copyTerminalID: copyID(sessionID)
@@ -417,6 +504,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
 /// system appearance.
 final class TerminalContainerView: NSView {
     let terminal: TerminalView
+    var isActive = true
     var wasActive = false
     /// Focus asked for before the view reached a window (a tab's first pane); granted on arrival.
     var wantsFocus = false
@@ -452,9 +540,11 @@ final class TerminalContainerView: NSView {
     }
 
     private func applyTheme() {
-        let theme = TerminalTheme.resolve(for: effectiveAppearance)
+        let theme = TerminalSettingsModel().palette(for: effectiveAppearance)
         layer?.backgroundColor = theme.background.cgColor
-        theme.apply(to: terminal)
+        let font = terminal.font
+        TerminalSettingsModel().apply(to: terminal, isActive: isActive)
+        terminal.font = font
         terminal.needsDisplay = true
     }
 }
@@ -581,15 +671,21 @@ private struct SmthzTerminalSurface: NSViewRepresentable {
 
     func makeNSView(context: Context) -> TerminalContainerView {
         updateCallbacks()
+        let font = controller.view.font
+        TerminalSettingsModel().apply(to: controller.view, isActive: isActive)
+        controller.view.font = font
         return TerminalContainerView(terminal: controller.view)
     }
 
     func updateNSView(_ container: TerminalContainerView, context: Context) {
         updateCallbacks()
-        if container.terminal.font.pointSize != fontSize {
-            container.terminal.font = TerminalTheme.font(size: fontSize)
+        if controller.shellFontSize != fontSize {
+            container.terminal.font = NSFont(descriptor: container.terminal.font.fontDescriptor, size: fontSize)
+                ?? TerminalTheme.font(size: fontSize)
+            controller.shellFontSize = fontSize
         }
-        container.alphaValue = isActive ? 1 : TerminalTheme.inactiveOpacity
+        container.isActive = isActive
+        container.terminal.alphaValue = isActive ? 1 : TerminalSettingsModel().inactiveOpacity
         if visible { controller.resume() } else { controller.pause() }
         if visible && isActive && !container.wasActive {
             DispatchQueue.main.async { [weak container] in

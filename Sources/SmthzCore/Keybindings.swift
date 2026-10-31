@@ -344,7 +344,7 @@ public struct KeybindingRegistry: Sendable {
         .init(action: .terminalClosePane, title: "Close active pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+W"]),
         .init(action: .terminalSplitRight, title: "Split terminal right", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+D"]),
         .init(action: .terminalSplitDown, title: "Split terminal down", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+D"]),
-        .init(action: .terminalSwitchInputSource, title: "Switch input source / language (native)", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: false, defaultBindings: []),
+        .init(action: .terminalSwitchInputSource, title: "Switch input source / language (native)", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: []),
     ]
 
     public static let defaults: KeybindingRegistry = {

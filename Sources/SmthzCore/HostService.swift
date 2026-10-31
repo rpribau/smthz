@@ -69,12 +69,14 @@ public final class HostService: @unchecked Sendable {
     private let stateLock = NSLock()
     private var active: [UUID: Control] = [:]
     private var subscribers = 0
+    private let browserForwarder = BrowserForwarder()
     public var activeSubscriberCount: Int { stateLock.withLock { subscribers } }
     public static let maximumSubscribers = 64
     public static let streamChunkBytes = 65_536
     public static let maximumPendingRequests = 64
     public static let maximumRequestBytes = 700_000
     public static let maximumTimeoutMilliseconds = 30_000
+    public static let maximumBrowserTimeoutMilliseconds = 120_000
 
     private final class Control: @unchecked Sendable {
         let requestID: String
@@ -159,6 +161,26 @@ public final class HostService: @unchecked Sendable {
                 return try Self.agentStatusFields(sessions)
             }
         }
+        let browser = browserForwarder
+        router.register("browser.provider.register", methodClass: .read) { params, _ in
+            guard params.isEmpty else { throw HostRPCError("badRequest") }
+            return [:]
+        }
+        router.register("browser.provider.reply", methodClass: .read) { params, _ in
+            try browser.reply(params)
+            return [:]
+        }
+        for method in Set(BrowserCommand.allCases.map(\.method)) {
+            // Browser reads are journaled too: retrying a snapshot must replay its original result.
+            router.register(method, methodClass: .mutation, repository: { _ in nil }) { params, context in
+                let request = try JSONDecoder().decode(BrowserRequest.self, from: JSONEncoder().encode(params))
+                guard request.method == method else { throw HostRPCError("badRequest") }
+                guard request.command.support != .unsupported else {
+                    throw HostRPCError("unsupported", detail: "browser exec is unsupported (R-B9)")
+                }
+                return try browser.forward(request, context: context)
+            }
+        }
     }
 
     private static func agentStatusFields(_ sessions: SessionManager) throws -> [String: HostJSON] {
@@ -169,6 +191,26 @@ public final class HostService: @unchecked Sendable {
     /// Consumes a dedicated connection. Socket writes provide back-pressure;
     /// subscriber state is only a cursor, never an unbounded queue of PTY bytes.
     public func stream(_ payload: Data, send: (Data) throws -> Void, cancelled: () -> Bool) -> Bool {
+        if let request = try? JSONDecoder().decode(RPCEnvelope.self, from: payload),
+           request.method == "browser.provider.register" {
+            let acknowledgement = handle(payload)
+            do {
+                let envelope = try JSONDecoder().decode(RPCEnvelope.self, from: acknowledgement)
+                let fields = try JSONDecoder().decode([String: HostJSON].self, from: envelope.payload)
+                guard fields["ok"] == .bool(true) else { try send(acknowledgement); return true }
+                let providerID = try browserForwarder.register()
+                defer { browserForwarder.unregister(providerID) }
+                try send(response(to: request, body: Body(ok: true, credential: providerID)))
+                while !cancelled() && !stateLock.withLock({ stopped }) {
+                    if let command = browserForwarder.next(providerID) {
+                        try send(JSONEncoder().encode(command))
+                    } else { Thread.sleep(forTimeInterval: 0.01) }
+                }
+            } catch let error as HostRPCError {
+                try? send(response(to: request, body: Body(ok: false, error: error.code, detail: error.detail)))
+            } catch { /* Disconnect releases the provider and wakes its pending requests. */ }
+            return true
+        }
         guard let request = try? JSONDecoder().decode(RPCEnvelope.self, from: payload),
               ["session.subscribe", "agent.status.subscribe"].contains(request.method) else { return false }
         let admitted = stateLock.withLock {
@@ -271,7 +313,8 @@ public final class HostService: @unchecked Sendable {
             return response(to: request, body: Body(ok: false, error: "unauthorized"))
         }
         let timeout = request.timeoutMilliseconds ?? 5_000
-        guard (1...Self.maximumTimeoutMilliseconds).contains(timeout) else {
+        let maximumTimeout = request.method.hasPrefix("browser.") ? Self.maximumBrowserTimeoutMilliseconds : Self.maximumTimeoutMilliseconds
+        guard (1...maximumTimeout).contains(timeout) else {
             return response(to: request, body: Body(ok: false, error: "limitExceeded"))
         }
         if request.method == "session.subscribe" {
@@ -296,6 +339,8 @@ public final class HostService: @unchecked Sendable {
             return response(to: request, body: Body(ok: true, cancelled: found))
         }
         let control = Control(requestID: request.requestID, milliseconds: timeout)
+        // Provider replies must drain pending browser calls even when admission is full.
+        if request.method == "browser.provider.reply" { return handleAdmitted(request, control: control) }
         let ticket = UUID()
         let admitted = stateLock.withLock {
             guard active.count < Self.maximumPendingRequests else { return false }
@@ -490,6 +535,83 @@ public final class HostService: @unchecked Sendable {
     }
 
     deinit { stop() }
+
+    private final class BrowserForwarder: @unchecked Sendable {
+        private struct Pending {
+            let command: HostBrowserCommand
+            var delivered = false
+            var result: Result<[String: HostJSON], HostRPCError>?
+        }
+        private let lock = NSLock()
+        private var providerID: String?
+        private var pending: [String: Pending] = [:]
+
+        func register() throws -> String {
+            try lock.withLock {
+                guard providerID == nil else { throw HostRPCError("browserProviderAlreadyRegistered") }
+                let id = HostCapabilityToken.random()
+                providerID = id
+                return id
+            }
+        }
+
+        func unregister(_ id: String) {
+            lock.withLock {
+                guard providerID == id else { return }
+                providerID = nil
+                for key in Array(pending.keys) where pending[key]?.result == nil {
+                    pending[key]?.result = .failure(HostRPCError("browserProviderDisconnected", detail: "Browser provider disconnected during the request"))
+                }
+            }
+        }
+
+        func next(_ id: String) -> HostBrowserCommand? {
+            lock.withLock {
+                guard providerID == id,
+                      let key = pending.first(where: { !$0.value.delivered && $0.value.result == nil })?.key else { return nil }
+                pending[key]?.delivered = true
+                return pending[key]?.command
+            }
+        }
+
+        func reply(_ params: [String: HostJSON]) throws {
+            guard let id = params["providerID"]?.string, let deliveryID = params["deliveryID"]?.string else {
+                throw HostRPCError("badRequest")
+            }
+            let result: Result<[String: HostJSON], HostRPCError>
+            if let code = params["error"]?.string {
+                result = .failure(HostRPCError(code, detail: params["detail"]?.string))
+            } else if let value = params["result"] {
+                _ = try JSONDecoder().decode(BrowserResult.self, from: JSONEncoder().encode(value))
+                result = .success(["result": value])
+            } else { throw HostRPCError("badRequest") }
+            try lock.withLock {
+                guard let providerID, HostCapabilityToken.matches(id, providerID) else { throw HostRPCError("unauthorized") }
+                guard pending[deliveryID]?.delivered == true, pending[deliveryID]?.result == nil else {
+                    throw HostRPCError("browserRequestExpired")
+                }
+                pending[deliveryID]?.result = result
+            }
+        }
+
+        func forward(_ request: BrowserRequest, context: HostRequestContext) throws -> [String: HostJSON] {
+            let deliveryID = UUID().uuidString
+            try lock.withLock {
+                guard providerID != nil else {
+                    throw HostRPCError("noBrowserProvider", detail: "No browser provider: start the smthz app")
+                }
+                guard pending.count < HostService.maximumPendingRequests else { throw HostRPCError("limitExceeded") }
+                pending[deliveryID] = Pending(command: HostBrowserCommand(deliveryID: deliveryID,
+                    requestID: context.requestID, request: request))
+            }
+            defer { _ = lock.withLock { pending.removeValue(forKey: deliveryID) } }
+            while true {
+                try context.checkCancellation()
+                if let result = lock.withLock({ pending[deliveryID]?.result }) { return try result.get() }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+    }
 
     private struct Body: Encodable {
         let ok: Bool

@@ -2,8 +2,7 @@ import Foundation
 import SmthzCore
 
 /// `smthz browser <cmd>`: parses with BrowserCommandParser and sends the BrowserRequest as host RPC
-/// `browser.*`. The host forwards it to the app's browser provider (BROWSER-AGENTS-EXPERIMENT A.6); until that
-/// forwarding exists the host answers unknownMethod, reported here as browserUnavailable.
+/// `browser.*`. The host forwards it to the app's browser provider (BROWSER-AGENTS-EXPERIMENT A.6).
 func runBrowserCommand(args: [String], defaultSocket: String) throws {
     try BrowserCommands.run(arguments: args, defaultSocket: defaultSocket)
 }
@@ -21,22 +20,10 @@ enum BrowserCommands {
         }
         let client = try HostClient(socketPath: invocation.socket ?? defaultSocket)
         defer { client.disconnect() }
-        let payload = try client.rawCall(method: request.method, params: JSONEncoder().encode(request),
-                                         requestID: invocation.requestID ?? RequestID.generate().rawValue,
-                                         timeoutMilliseconds: invocation.timeoutMilliseconds)
-        let response = try JSONDecoder().decode([String: HostJSON].self, from: payload)
-        guard response["ok"] == .bool(true) else {
-            let code = response["error"]?.string ?? "unknownError"
-            if code == "unknownMethod" {
-                throw HostRPCError("browserUnavailable",
-                                   detail: "The host has no browser provider: start the smthz app (browser automation runs in the app)")
-            }
-            throw HostRPCError(code, detail: response["detail"]?.string)
-        }
-        var body = response["result"]?.object ?? response
-        body.removeValue(forKey: "ok")
+        let result = try client.browser(request, requestID: invocation.requestID ?? RequestID.generate().rawValue,
+                                        timeoutMilliseconds: invocation.timeoutMilliseconds)
+        let body = try JSONDecoder().decode([String: HostJSON].self, from: JSONEncoder().encode(result))
         if invocation.json { try CLICommon.printResult(body); return }
-        let result = try JSONDecoder().decode(BrowserResult.self, from: JSONEncoder().encode(body))
         print(summary(result, request: request))
     }
 
