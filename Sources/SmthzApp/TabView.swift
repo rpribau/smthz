@@ -46,8 +46,9 @@ struct ShellTabView: View {
     let rename: (String) -> Void
     let togglePin: () -> Void
     var closeOthers: (() -> Void)? = nil
-    var split: (() -> Void)? = nil
-    var moveToPane: (() -> Void)? = nil
+    var split: ((Bool) -> Void)? = nil
+    var moveToPane: ((String) -> Void)? = nil
+    var equalize: (() -> Void)? = nil
     var collapsePane: (() -> Void)? = nil
     var closeSplitPane: (() -> Void)? = nil
     var onColourChange: ((Color?) -> Void)? = nil
@@ -199,20 +200,20 @@ struct ShellTabView: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.font = SmthzFont.nsUI(size: 12, wght: 450)
-        // VISUAL-ONLY: stub data until M3 A2 split and pane commands.
-        menu.addAction("Split terminal right", icon: "panel-right-close", key: "d", enabled: false) {}
+        menu.addAction("Split terminal right", icon: "panel-right-close", key: "d", enabled: split != nil) { split?(false) }
         menu.addAction("Split terminal down", icon: "panel-bottom-close", key: "d",
-                       modifiers: [.command, .shift], enabled: false) {}
-        if tab.hasSplitGroups {
-            let move = menu.addAction("Move Tab to Split", icon: "columns-2", enabled: false) {}
-            let directions = NSMenu()
-            directions.autoenablesItems = false
-            for (title, icon) in [("Right", "arrow-right"), ("Left", "arrow-left"),
-                                  ("Down", "arrow-down"), ("Up", "arrow-up")] {
-                directions.addAction(title, icon: icon, enabled: false) {}
-            }
-            move.submenu = directions
+                       modifiers: [.command, .shift], enabled: split != nil) { split?(true) }
+        let move = menu.addAction("Move Tab to Split", icon: "columns-2", enabled: moveToPane != nil) {}
+        let directions = NSMenu()
+        directions.autoenablesItems = false
+        for (title, icon, side) in [("Right", "arrow-right", "right"), ("Left", "arrow-left", "left"),
+                                    ("Down", "arrow-down", "bottom"), ("Up", "arrow-up", "top")] {
+            directions.addAction(title, icon: icon, enabled: moveToPane != nil) { moveToPane?(side) }
         }
+        move.submenu = directions
+        menu.addAction("Equalize Pane Sizes", icon: "panels-top-left", enabled: equalize != nil) { equalize?() }
+        menu.addAction(tab.expanded ? "Collapse Pane" : "Expand Pane", icon: "minimize-2",
+                       enabled: collapsePane != nil) { collapsePane?() }
         menu.addItem(.separator())
         menu.addAction(tab.pinned ? "Unpin Tab" : "Pin Tab", icon: tab.pinned ? "pin-off" : "pin", togglePin)
         menu.addAction("Copy Tab ID", icon: "copy") {
@@ -223,7 +224,7 @@ struct ShellTabView: View {
         menu.addItem(.separator())
         menu.addAction("Close", icon: "x", key: "w", enabled: !tab.pinned, close)
         menu.addAction("Close Others", icon: "list-x", enabled: closeOthers != nil) { closeOthers?() }
-        if tab.hasSplitGroups {
+        if closeSplitPane != nil {
             menu.addAction("Close split pane", icon: "x", enabled: closeSplitPane != nil) { closeSplitPane?() }
         }
         menu.addItem(.separator())

@@ -187,10 +187,16 @@ struct HostLauncherTests {
         let fixture = try LauncherFixture()
         let launcher = fixture.launcher()
         let id = try fixture.started(await launcher.ensureRunning(timeout: .seconds(20)))
+        let client = try HostClient(socketPath: fixture.endpoint.socketPath)
+        defer { client.disconnect() }
+        let session = try client.createSession(executable: "/bin/sleep", arguments: ["300"])
         let other = fixture.launcher(appVersion: "future-app")
-        #expect(await other.ensureRunning(timeout: .seconds(20)) == .running(
-            identity: id, version: ApplicationIdentity.version, compatible: false))
+        for _ in 0..<3 {
+            #expect(await other.ensureRunning(timeout: .seconds(20)) == .running(
+                identity: id, version: ApplicationIdentity.version, compatible: false))
+        }
         #expect(id.isStillRunning())
+        #expect(try client.list().sessions.contains { $0.id == session.id && $0.running })
         try await launcher.stop(expected: id, timeout: .seconds(20))
     }
 
@@ -263,4 +269,58 @@ struct HostLauncherTests {
         _ = await fixture.launcher().ensureRunning(timeout: .seconds(20))
         #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.endpoint.socketPath)) == Data("not a socket".utf8))
     }
+
+    @Test func readinessTimeoutRetriesSameLiveChildBeforeInstanceLock() async throws {
+        let fixture = try LauncherFixture()
+        try FileManager.default.createDirectory(at: fixture.endpoint.stateDirectory, withIntermediateDirectories: true)
+        let gate = fixture.endpoint.stateDirectory.appendingPathComponent("gated-host.sh")
+        let marker = fixture.endpoint.stateDirectory.appendingPathComponent("launches")
+        // Pause before exec/lock acquisition, modelling a slow dyld/host startup.
+        // A marker and SIGCONT gate avoid relying on a particular startup speed.
+        let script = """
+        #!/bin/sh
+        echo $$ >> '\(marker.path)'
+        kill -STOP $$
+        exec '\(fixture.executable.path)' "$@"
+        """
+        try script.write(to: gate, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: gate.path)
+        func launchedPIDs() -> [Int32] {
+            (try? String(contentsOf: marker, encoding: .utf8))?.split(separator: "\n").compactMap { Int32($0) } ?? []
+        }
+        var initializerIdentities: [ProcessIdentity] = []
+        defer {
+            // Gates not yet resumed still own their PIDs. Once resumed, signal
+            // only the recorded process incarnation, including the pre-fix extra.
+            for identity in initializerIdentities where identity.isStillRunning() {
+                Darwin.kill(identity.pid, SIGCONT)
+                if identity.isStillRunning() { Darwin.kill(identity.pid, SIGTERM) }
+            }
+            _ = launcherEventually { initializerIdentities.allSatisfy { !$0.isStillRunning() } }
+        }
+        let launcher = HostLauncher(endpoint: fixture.endpoint, executable: gate)
+        guard case .failed(exitStatus: nil, _) = await launcher.ensureRunning(timeout: .seconds(1)) else {
+            Issue.record("Paused host should exceed readiness deadline"); return
+        }
+        try #require(launcherEventually { !launchedPIDs().isEmpty })
+        initializerIdentities = launchedPIDs().compactMap { ProcessIdentity.lookup(pid: $0) }
+        let retry = await launcher.ensureRunning(timeout: .seconds(1))
+        initializerIdentities = launchedPIDs().compactMap { ProcessIdentity.lookup(pid: $0) }
+        guard case .failed(exitStatus: nil, _) = retry else {
+            Issue.record("Retry should wait for the existing startup"); return
+        }
+        #expect(launchedPIDs().count == 1, "Readiness timeout must not create a second live host initializer")
+        let first = try #require(launchedPIDs().first)
+        for pid in launchedPIDs() { Darwin.kill(pid, SIGCONT) }
+        let state = await launcher.ensureRunning(timeout: .seconds(20))
+        let identity: ProcessIdentity
+        switch state {
+        case .startedByUs(let id), .running(let id, _, _): identity = id
+        default: Issue.record("Resumed host failed: \(state)"); return
+        }
+        fixture.identities.append(identity)
+        #expect(identity.pid == first)
+        try await launcher.stop(expected: identity, timeout: .seconds(20))
+    }
+
 }

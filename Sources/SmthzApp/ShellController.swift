@@ -85,7 +85,7 @@ final class ShellController {
         }
     }
 
-    private var workspace: WorkspaceLayout { state.workspaces[.home]! }
+    var workspace: WorkspaceLayout { state.workspaces[.home]! }
     var workspaceTitle: String {
         get { workspace.displayName == "Home" ? "Default workspace" : workspace.displayName }
         set { _ = apply(.openWorkspace(.home, displayName: newValue, rootPath: workspace.rootPath)) }
@@ -107,7 +107,12 @@ final class ShellController {
         }
         set {
             guard let newValue else { return }
-            if let tab = tab(newValue) { _ = apply(.activateTab(tab.id)) }
+            if let tab = tab(newValue) {
+                _ = apply(.activateTab(tab.id))
+                if let pane = tab.panes.leaves.first(where: { workspace.panes[$0]?.binding?.sessionID == newValue }) {
+                    _ = apply(.focusPane(tab.id, pane))
+                }
+            }
             else if let session = sessions.first(where: { $0.id == newValue }),
                     case .running(let host, _) = snapshot?.state {
                 // Explicit Resource Manager navigation may reopen an exited record;
@@ -129,12 +134,70 @@ final class ShellController {
     }
     var tabs: [ShellTabItem] {
         visibleIDs.map { id in ShellTabItem(id: id, title: title(id), colour: tab(id)?.color.map(Self.color),
-            pinned: pinned.contains(id), active: selectedSessionID == id, cwd: directory(id)) }
+            pinned: pinned.contains(id), active: selectedSessionID == id,
+            expanded: tab(id)?.expandedPane != nil, cwd: directory(id),
+            hasSplitGroups: (workspace.groupLayout?.leaves.count ?? 0) > 1) }
     }
     func directory(_ id: String) -> String? { directories[id] ?? sessions.first { $0.id == id }?.cwd ?? tab(id)?.startupCwd }
     var rootURL: URL? { selectedSessionID.flatMap { directory($0) }.map { URL(fileURLWithPath: $0) } }
     func rename(_ id: String, title: String?) { if let tab = tab(id) { _ = apply(.renameTab(tab.id, title)) } }
-    func oscTitle(_ id: String, title: String) { if let tab = tab(id) { _ = apply(.renamePane(tab.activePane, title)) } }
+    func oscTitle(_ id: String, title: String) {
+        if let pane = workspace.panes.values.first(where: { $0.binding?.sessionID == id }) {
+            _ = apply(.renamePane(pane.id, title))
+        }
+    }
+    var activeTab: TerminalTabRecord? {
+        guard let group = workspace.activeGroup, let id = workspace.groups[group]?.activeTab else { return nil }
+        return workspace.tabs[id]
+    }
+    func paneCommand(_ command: ShellCommand) { _ = apply(command) }
+    func focus(_ pane: PaneID, tab: TabID) {
+        _ = apply(.activateTab(tab)); _ = apply(.focusPane(tab, pane))
+    }
+    func paneDirectory(_ pane: PaneID, path: String?) {
+        guard let path, var record = workspace.panes[pane] else { return }
+        if let session = record.binding?.sessionID { directories[session] = path }
+        guard record.startupCwd != path else { return }
+        record.startupCwd = path
+        state.workspaces[.home]?.panes[pane] = record
+        scheduleSave()
+    }
+    func split(_ tab: TabID, pane: PaneID, side: PaneSide) async {
+        guard hostIsRunning, !creatingShell else { return }
+        creatingShell = true
+        defer { creatingShell = false }
+        let grid = workspace.panes[pane]?.lastGrid
+        let effects = apply(.splitPane(tab, pane: pane, side: side))
+        // Seed the new PTY near its eventual grid before the first prompt. The
+        // native terminal reports the exact cell count after AppKit lays it out.
+        if let grid {
+            let horizontal = side == .left || side == .right
+            for id in effects.startPanes {
+                _ = apply(.setPaneGrid(id, cols: horizontal ? max(1, (grid.cols - 1) / 2) : grid.cols,
+                    rows: horizontal ? grid.rows : max(1, (grid.rows - 1) / 2)))
+            }
+        }
+        await execute(effects)
+    }
+    func splitSession(_ id: String, side: PaneSide) {
+        guard let tab = tab(id) else { return }
+        Task { await split(tab.id, pane: tab.activePane, side: side) }
+    }
+    func moveSession(_ id: String, side: PaneSide) {
+        if let tab = tab(id) { _ = apply(.moveTabToSplit(tab.id, side: side)) }
+    }
+    func closePane(_ pane: PaneID, tab: TabID) async {
+        guard let record = workspace.tabs[tab] else { return }
+        let command: ShellCommand = record.panes.leaves.count == 1 ? .closeTab(tab, force: true) : .closePane(tab, pane)
+        guard case .success(let preview) = state.applying(command, ids: &ids) else { return }
+        guard await execute(preview.effects) else { return }
+        _ = apply(command); flush()
+    }
+    func closeActivePane() async {
+        guard let tab = activeTab else { return }
+        await closePane(tab.activePane, tab: tab.id)
+    }
+
     func setColor(_ id: String, color: Color?) {
         if let tab = tab(id) { _ = apply(.setTabColor(tab.id, TabColor.allCases.first { Self.color($0) == color })) }
     }
@@ -251,16 +314,16 @@ final class ShellController {
         await execute(effects)
     }
     func restart(_ id: String) async {
-        guard let tab = tab(id) else { return }
+        guard let tab = tab(id), let pane = tab.panes.leaves.first(where: { workspace.panes[$0]?.binding?.sessionID == id }) else { return }
         let original = sessions.first { $0.id == id }
         let grid = TerminalSizeHint.latest
-        restartParameters[tab.activePane] = ShellCreateParameters(executable: original?.executable ?? "/bin/zsh",
+        restartParameters[pane] = ShellCreateParameters(executable: original?.executable ?? "/bin/zsh",
             arguments: original?.arguments ?? ["-l"], cwd: directory(id),
-            rows: grid?.rows ?? workspace.panes[tab.activePane]?.lastGrid?.rows ?? 24,
-            cols: grid?.cols ?? workspace.panes[tab.activePane]?.lastGrid?.cols ?? 80)
-        do { try saveParameters(restartParameters[tab.activePane]!, to: restartURL(tab.activePane)) }
+            rows: grid?.rows ?? workspace.panes[pane]?.lastGrid?.rows ?? 24,
+            cols: grid?.cols ?? workspace.panes[pane]?.lastGrid?.cols ?? 80)
+        do { try saveParameters(restartParameters[pane]!, to: restartURL(pane)) }
         catch { actionError = "Could not save restart request: \(error)"; return }
-        await execute(apply(.restartPane(tab.activePane)))
+        await execute(apply(.restartPane(pane)))
     }
     func close(_ id: String) async {
         guard let tab = tab(id) else { return }

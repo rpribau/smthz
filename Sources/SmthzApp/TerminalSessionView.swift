@@ -65,6 +65,7 @@ private final class FocusingTerminalView: TerminalView {
     var showFind: (() -> Void)?
     var clearScreen: (() -> Void)?
     var makeContextMenu: (() -> NSMenu)?
+    var onFocus: (() -> Void)?
     private var shortcutMonitor: Any?
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -74,7 +75,7 @@ private final class FocusingTerminalView: TerminalView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard let window else { return }
+        guard window != nil else { return }
         shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let handled = MainActor.assumeIsolated {
                 guard let self, self.window?.firstResponder === self else { return false }
@@ -82,10 +83,11 @@ private final class FocusingTerminalView: TerminalView {
             }
             return handled ? nil : event
         }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.window === window else { return }
-            window.makeFirstResponder(self)
-        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocus?()
+        super.mouseDown(with: event)
     }
 
     private func handleShortcut(_ event: NSEvent) -> Bool {
@@ -105,6 +107,8 @@ private final class FocusingTerminalView: TerminalView {
             super.rightMouseDown(with: event)
             return
         }
+        onFocus?()
+        window?.makeFirstResponder(self)
         guard let menu = makeContextMenu?() else { return }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
@@ -127,6 +131,15 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     @Published var restartError: String?
     var onTitleChange: (String) -> Void = { _ in }
     var onDirectoryChange: (String?) -> Void = { _ in }
+    var onFocus: () -> Void = {}
+    var onGrid: (Int, Int) -> Void = { _, _ in }
+    var onExit: (ProcessExitFacts) -> Void = { _ in }
+    var onPaneAction: (SmthzTerminalContextMenu.Action) -> Void = { _ in }
+    private var cursor: UInt64 = 0
+    private var inputWritten = false
+    private var outputReceived = false
+    private var spawnedFresh = false
+    private var resumed = false
     var paneID: String?
     private var directory: String?
     private var grid = (rows: 24, cols: 80)
@@ -137,16 +150,21 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     private var outputTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
 
-    init(sessionID: String, socketPath: String, fontSize: CGFloat) {
+    init(sessionID: String, socketPath: String, fontSize: CGFloat, initialGrid: PaneGrid? = nil) {
         self.sessionID = sessionID
         transport = TerminalTransport(socketPath: socketPath)
         (commands, commandSink) = AsyncStream.makeStream(of: TerminalCommand.self)
         view = FocusingTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
         super.init()
         view.font = TerminalTheme.font(size: fontSize)
+        if let initialGrid {
+            grid = (rows: initialGrid.rows, cols: initialGrid.cols)
+            view.resize(cols: initialGrid.cols, rows: initialGrid.rows)
+        }
         view.terminalDelegate = self
         view.optionAsMetaKey = true
         if let terminal = view as? FocusingTerminalView {
+            terminal.onFocus = { [weak self] in self?.onFocus() }
             terminal.showFind = { [weak self] in self?.showingFind = true }
             terminal.clearScreen = { [weak self] in self?.clearScreen() }
             terminal.makeContextMenu = { [weak self] in
@@ -160,6 +178,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
             }
         }
         start()
+        pause()
     }
 
     private func start() {
@@ -184,24 +203,38 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
                 }
             }
         }
+    }
+
+    /// Pause polling only. The emulator, command stream and absolute cursor survive.
+    func pause() { outputTask?.cancel(); outputTask = nil; resumed = false }
+    func resume() {
+        guard !resumed, exit == nil else { return }
+        resumed = true
+        let id = sessionID
+        let transport = transport
         outputTask = Task { [weak self] in
-            var cursor: UInt64 = 0
             while !Task.isCancelled {
                 do {
+                    guard let cursor = self?.cursor else { return }
                     let result = try await transport.read(id: id, from: cursor)
                     guard !Task.isCancelled, let self else { return }
-                    cursor = result.next
+                    self.cursor = result.next
                     if result.truncated {
                         // The host dropped output older than its window: what we drew is stale.
                         // Start the emulator over and continue from the returned cursor.
                         self.view.resetToInitialState()
                     }
                     if !result.data.isEmpty {
+                        self.outputReceived = true
                         self.view.feed(byteArray: ArraySlice(result.data))
                         continue // drain a backlog without sleeping
                     }
                     if let exit = result.exit {
                         self.exit = exit
+                        self.onExit(ProcessExitFacts(code: exit.code, signal: exit.signal,
+                            spawnedFresh: self.spawnedFresh, restored: !self.spawnedFresh,
+                            inputWritten: self.inputWritten, outputReceived: self.outputReceived,
+                            tabHadPaneAtConnect: true))
                         return
                     }
                     try await Task.sleep(for: .milliseconds(25))
@@ -230,6 +263,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
         case .copyPaneID: if let paneID { copyID(paneID) }
         case .clear: clearScreen()
         case .reset: view.resetToInitialState()
+        default: onPaneAction(action)
         }
     }
 
@@ -269,7 +303,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     }
 
     func stop() {
-        outputTask?.cancel()
+        pause()
         commandTask?.cancel()
         commandSink.finish()
         let transport = transport
@@ -283,11 +317,13 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
         Task { @MainActor [weak self] in
             TerminalSizeHint.latest = (rows: newRows, cols: newCols)
             self?.grid = (rows: newRows, cols: newCols)
+            self?.onGrid(newCols, newRows)
         }
         commandSink.yield(.resize(rows: newRows, cols: newCols))
     }
 
     nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        Task { @MainActor [weak self] in self?.inputWritten = true }
         commandSink.yield(.write(Data(data)))
     }
 
@@ -327,6 +363,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
 /// system appearance.
 final class TerminalContainerView: NSView {
     let terminal: TerminalView
+    var wasActive = false
 
     init(terminal: TerminalView) {
         self.terminal = terminal
@@ -371,13 +408,21 @@ struct TerminalSessionView: View {
     var onSessionRestart: (SessionInfo) -> Void = { _ in }
     var restartSession: (() async -> Void)? = nil
     var onClose: (() -> Void)? = nil
+    var cachedController: TerminalSessionController? = nil
+    var visible = true
+    var onFocus: () -> Void = {}
+    var onGrid: (Int, Int) -> Void = { _, _ in }
+    var onExit: (ProcessExitFacts) -> Void = { _ in }
+    var onPaneAction: (SmthzTerminalContextMenu.Action) -> Void = { _ in }
     @State private var replacementID: String?
 
     var body: some View {
         SmthzTerminalPane(sessionID: replacementID ?? sessionID, socketPath: socketPath,
             fontSize: fontSize, isActive: isActive, paneID: paneID,
             onTitleChange: onTitleChange, onDirectoryChange: onDirectoryChange,
-            onRestart: { session in replacementID = session.id; onSessionRestart(session) }, onClose: onClose, restartSession: restartSession)
+            onRestart: { session in replacementID = session.id; onSessionRestart(session) }, onClose: onClose, restartSession: restartSession,
+            cachedController: cachedController, visible: visible, onFocus: onFocus, onGrid: onGrid,
+            onExit: onExit, onPaneAction: onPaneAction)
             .id(replacementID ?? sessionID)
             .onChange(of: sessionID) { replacementID = nil }
     }
@@ -393,11 +438,19 @@ private struct SmthzTerminalPane: View {
     let onRestart: (SessionInfo) -> Void
     let onClose: (() -> Void)?
     let restartSession: (() async -> Void)?
+    let visible: Bool
+    let onFocus: () -> Void
+    let onGrid: (Int, Int) -> Void
+    let onExit: (ProcessExitFacts) -> Void
+    let onPaneAction: (SmthzTerminalContextMenu.Action) -> Void
 
     init(sessionID: String, socketPath: String, fontSize: Double, isActive: Bool, paneID: String?,
          onTitleChange: @escaping (String) -> Void, onDirectoryChange: @escaping (String?) -> Void,
-         onRestart: @escaping (SessionInfo) -> Void, onClose: (() -> Void)?, restartSession: (() async -> Void)?) {
-        _controller = StateObject(wrappedValue: TerminalSessionController(sessionID: sessionID,
+         onRestart: @escaping (SessionInfo) -> Void, onClose: (() -> Void)?, restartSession: (() async -> Void)?,
+         cachedController: TerminalSessionController?, visible: Bool, onFocus: @escaping () -> Void,
+         onGrid: @escaping (Int, Int) -> Void, onExit: @escaping (ProcessExitFacts) -> Void,
+         onPaneAction: @escaping (SmthzTerminalContextMenu.Action) -> Void) {
+        _controller = StateObject(wrappedValue: cachedController ?? TerminalSessionController(sessionID: sessionID,
             socketPath: socketPath, fontSize: fontSize))
         self.fontSize = fontSize
         self.isActive = isActive
@@ -407,11 +460,17 @@ private struct SmthzTerminalPane: View {
         self.onRestart = onRestart
         self.onClose = onClose
         self.restartSession = restartSession
+        self.visible = visible
+        self.onFocus = onFocus
+        self.onGrid = onGrid
+        self.onExit = onExit
+        self.onPaneAction = onPaneAction
     }
 
     var body: some View {
         SmthzTerminalSurface(controller: controller, fontSize: fontSize, isActive: isActive,
-            paneID: paneID, onTitleChange: onTitleChange, onDirectoryChange: onDirectoryChange)
+            paneID: paneID, onTitleChange: onTitleChange, onDirectoryChange: onDirectoryChange,
+            visible: visible, onFocus: onFocus, onGrid: onGrid, onExit: onExit, onPaneAction: onPaneAction)
             .overlay(alignment: .topTrailing) {
                 if controller.showingFind {
                     SmthzTerminalFindBar(query: $controller.query, caseSensitive: $controller.caseSensitive,
@@ -449,6 +508,12 @@ private struct SmthzTerminalSurface: NSViewRepresentable {
     let onTitleChange: (String) -> Void
     let onDirectoryChange: (String?) -> Void
 
+    let visible: Bool
+    let onFocus: () -> Void
+    let onGrid: (Int, Int) -> Void
+    let onExit: (ProcessExitFacts) -> Void
+    let onPaneAction: (SmthzTerminalContextMenu.Action) -> Void
+
     func makeCoordinator() -> TerminalSessionController { controller }
 
     func makeNSView(context: Context) -> TerminalContainerView {
@@ -462,15 +527,27 @@ private struct SmthzTerminalSurface: NSViewRepresentable {
             container.terminal.font = TerminalTheme.font(size: fontSize)
         }
         container.alphaValue = isActive ? 1 : TerminalTheme.inactiveOpacity
+        if visible { controller.resume() } else { controller.pause() }
+        if visible && isActive && !container.wasActive {
+            DispatchQueue.main.async { [weak container] in
+                guard let container, container.window != nil else { return }
+                container.window?.makeFirstResponder(container.terminal)
+            }
+        }
+        container.wasActive = visible && isActive
     }
 
     private func updateCallbacks() {
+        controller.onFocus = onFocus
+        controller.onGrid = onGrid
+        controller.onExit = onExit
+        controller.onPaneAction = onPaneAction
         controller.paneID = paneID
         controller.onTitleChange = onTitleChange
         controller.onDirectoryChange = onDirectoryChange
     }
 
     static func dismantleNSView(_ view: TerminalContainerView, coordinator: TerminalSessionController) {
-        coordinator.stop()
+        coordinator.pause()
     }
 }

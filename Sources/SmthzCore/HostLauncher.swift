@@ -71,6 +71,9 @@ private final class HostLaunchWorker: @unchecked Sendable {
     let appVersion: String
     let throttle: (attempts: Int, window: Duration)
     var attempts: [ContinuousClock.Instant] = []
+    // A readiness deadline does not end the child's lifetime. Retain ownership
+    // across retries, including the interval before smthzd acquires its lock.
+    var launchedChild: LaunchChild?
     let clock = ContinuousClock()
 
     init(endpoint: HostEndpoint, executable: URL, appVersion: String,
@@ -159,15 +162,23 @@ private final class HostLaunchWorker: @unchecked Sendable {
         case .absent: break
         }
         guard clock.now < deadline else { return .unreachable(reason: "Host probe deadline expired") }
-        attempts.removeAll { $0.duration(to: clock.now) >= throttle.window }
-        guard attempts.count < max(0, throttle.attempts) else {
-            return .throttled(retryAfter: attempts.first.map { max(.zero, $0.advanced(by: throttle.window) - clock.now) }
-                              ?? max(.zero, throttle.window))
-        }
-        attempts.append(clock.now)
         let child: LaunchChild
-        do { child = try spawn() }
-        catch { return .failed(exitStatus: nil, logTail: logTail() + "\n" + String(describing: error)) }
+        if let pending = launchedChild, pending.exitStatus == nil {
+            // Socket absence alone cannot prove our previous launch is dead.
+            // Reuse the same initializer instead of creating another process.
+            child = pending
+        } else {
+            attempts.removeAll { $0.duration(to: clock.now) >= throttle.window }
+            guard attempts.count < max(0, throttle.attempts) else {
+                return .throttled(retryAfter: attempts.first.map { max(.zero, $0.advanced(by: throttle.window) - clock.now) }
+                                  ?? max(.zero, throttle.window))
+            }
+            attempts.append(clock.now)
+            do {
+                child = try spawn()
+                launchedChild = child
+            } catch { return .failed(exitStatus: nil, logTail: logTail() + "\n" + String(describing: error)) }
+        }
         repeat {
             // A competing launcher can win the lock; probe its healthy endpoint
             // even if our child exited with the single-instance status.

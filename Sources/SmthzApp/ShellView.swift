@@ -113,7 +113,7 @@ struct ShellView: View {
         }.background(SmthzTheme.worktreeSidebar)
     }
     private var projects: [SidebarProject] {
-        let count = model.visibleIDs.count
+        let count = model.workspace.panes.values.filter { $0.binding != nil }.count
         let card = WorkspaceCardData(id: "default", title: model.workspaceTitle,
             detail: count == 1 ? "1 session" : "\(count) sessions", status: count > 0 ? .live : .idle,
             isActive: appModel.destination == .workspaces, isUnread: model.workspaceUnread,
@@ -123,6 +123,14 @@ struct ShellView: View {
     private var tabs: some View {
         TabStripView(tabs: model.tabs, select: select, close: close,
             rename: { model.rename($0, title: $1) }, togglePin: model.togglePin, reorder: model.reorder,
+            split: { id, down in model.splitSession(id, side: down ? .bottom : .right) },
+            moveToPane: { id, side in if let side = PaneSide(rawValue: side) { model.moveSession(id, side: side) } },
+            equalize: { id in
+                model.selectedSessionID = id
+                if let tab = model.activeTab { model.paneCommand(.equalizePanes(tab.id)) }
+            },
+            collapsePane: { id in model.selectedSessionID = id; if let tab = model.activeTab { model.paneCommand(.toggleExpandPane(tab.id, tab.activePane)) } },
+            closeSplitPane: { id in model.selectedSessionID = id; if let tab = model.activeTab { closePane(tab.activePane, tab.id) } },
             command: { quickCommandsOpen.toggle() }, createActions: createActions,
             closeOthers: closeOthers, colourChange: { model.setColor($0, color: $1) },
             copyResult: { success in toast = SmthzToastMessage(title: success ? "Tab ID copied" : "Could not copy Tab ID", kind: success ? .success : .error) })
@@ -151,12 +159,9 @@ struct ShellView: View {
         case .workspaces:
             if !model.hostIsRunning {
                 LandingView(variant: .hostNotRunning, onRetry: { monitorGeneration += 1 })
-            } else if let id = model.selectedSessionID {
-                TerminalSessionView(sessionID: id, socketPath: model.socketPath, fontSize: model.terminalFontSize,
-                    onTitleChange: { model.oscTitle(id, title: $0) },
-                    onDirectoryChange: { model.directories[id] = $0 },
-                    restartSession: { await model.restart(id) }, onClose: { close(id) })
-                    .id(id).accessibilityLabel("Terminal")
+            } else if model.activeTab != nil {
+                LayoutSplitView(model: model, close: closePane)
+                    .accessibilityLabel("Terminal panes")
             } else {
                 LandingView(hasProjects: false, onAddProject: { overlay = .addProject },
                             onCreateWorkspace: { overlay = .newWorkspace })
@@ -201,6 +206,15 @@ struct ShellView: View {
     private func newShell() {
         settingsPage = nil; returnToWorkspace(); Task { await model.newShell() }
     }
+    private func closePane(_ pane: PaneID, _ tab: TabID) {
+        guard let record = model.workspace.panes[pane], let session = record.binding?.sessionID else { return }
+        Task {
+            await confirmations.confirmClose(sessionID: session, socketPath: model.socketPath,
+                tabLabel: record.title ?? model.title(session), isPinned: model.workspace.tabs[tab]?.isPinned == true) {
+                    Task { await model.closePane(pane, tab: tab) }
+                }
+        }
+    }
     private func close(_ id: String) {
         Task {
             await confirmations.confirmClose(sessionID: id, socketPath: model.socketPath,
@@ -240,7 +254,7 @@ struct ShellView: View {
     private func perform(_ action: SmthzShellActions.Action) {
         switch action {
         case .newTerminal: newShell()
-        case .closeTab: if let id = model.selectedSessionID { close(id) }
+        case .closeTab: if let tab = model.activeTab { closePane(tab.activePane, tab.id) }
         case .renameTab:
             if let id = model.selectedSessionID { renameDraft = model.title(id); renameID = id }
         case .clearTerminal:

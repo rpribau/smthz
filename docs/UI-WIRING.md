@@ -32,14 +32,14 @@ Implemented 2026-10-25; state ownership updated by WP-A0. ShellController now ap
 | Drag tab | Apply model moveTab, preserve the selected session, persist tab order | Real |
 | Ctrl-1…9 | Select tab in displayed order | Real |
 | Ctrl-Tab | Switch to previous recent visible tab | Real; no separate recent-switcher overlay |
-| Tab split/move/equalize/expand controls | Visible unavailable controls where their component exposes them | Stub: M3 A2 |
+| Tab split/move/equalize/expand controls | Wired to ShellController pane commands (A2); menu items not clicked by coordinator, only keyboard splits verified | Real: M3 A2 |
 | Command button | QuickCommandsMenu with search, Global/Default workspace scope | Real |
 | Quick commands Add/Edit/Copy/Delete | Existing shared store, editor/deletion dialogs, UserDefaults persistence | Real |
 | Quick command Run | `session.write` with the configured text and optional CR | Real |
 | Terminal context Quick Commands submenu | Saved commands execute through the terminal's serialized write stream; Add opens shared editor | Real |
 | Terminal OSC title/directory | Update tab title/hover directory, file palette root and right-sidebar root; user title wins | Real |
 | Terminal right-click Copy/Select All/Paste/IDs/Clear/Reset | Existing emulator/pasteboard actions | Real |
-| Terminal context Set Title / pane IDs / split controls | Disabled until pane ownership exists | Stub: M3 A2 |
+| Terminal context Set Title / pane IDs / split controls | Wired to the owning pane (A2); menu clicks not exercised by coordinator | Real: M3 A2 |
 | Cmd-F in terminal | Existing terminal find bar, previous/next, case and regex options | Real |
 | Cmd-K; Terminal menu Clear Screen | Clear local emulator without sending a shell command to a running program | Real |
 | Exit overlay Restart | Model restartPane creates a replacement session with the original executable/arguments and current directory/grid; stable tab identity retains title/colour/pin/order | Real |

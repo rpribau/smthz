@@ -21,10 +21,11 @@ struct TabStripView: View {
     let rename: (String, String) -> Void
     let togglePin: (String) -> Void
     var reorder: ((String, String, Bool) -> Void)? = nil
-    var split: ((String) -> Void)? = nil
-    var moveToPane: ((String) -> Void)? = nil
-    var collapsePane: (() -> Void)? = nil
-    var closeSplitPane: (() -> Void)? = nil
+    var split: ((String, Bool) -> Void)? = nil
+    var moveToPane: ((String, String) -> Void)? = nil
+    var equalize: ((String) -> Void)? = nil
+    var collapsePane: ((String) -> Void)? = nil
+    var closeSplitPane: ((String) -> Void)? = nil
     var command: (() -> Void)? = nil
     var createActions: [TabCreateAction] = []
     var closeOthers: ((String) -> Void)? = nil
@@ -75,7 +76,9 @@ struct TabStripView: View {
                     .smthzTooltip("Save a quick command for this repo")
                     if let closeSplitPane {
                         Menu {
-                            Button("Close split pane", role: .destructive, action: closeSplitPane)
+                            Button("Close split pane", role: .destructive) {
+                                if let active = tabs.first(where: \.active) { closeSplitPane(active.id) }
+                            }
                         } label: {
                             SmthzIcon.view(.ellipsis, size: 16).frame(width: 28, height: 28)
                         }
@@ -115,9 +118,11 @@ struct TabStripView: View {
                                 rename: { rename(tab.id, $0) }, togglePin: { togglePin(tab.id) },
                                 closeOthers: tabs.contains(where: { $0.id != tab.id && !$0.pinned })
                                     ? { closeOtherTabs(except: tab.id) } : nil,
-                                split: split.map { action in { action(tab.id) } },
-                                moveToPane: moveToPane.map { action in { action(tab.id) } },
-                                collapsePane: collapsePane,
+                                split: split.map { action in { down in action(tab.id, down) } },
+                                moveToPane: moveToPane.map { action in { side in action(tab.id, side) } },
+                                equalize: equalize.map { action in { action(tab.id) } },
+                                collapsePane: collapsePane.map { action in { action(tab.id) } },
+                                closeSplitPane: closeSplitPane.map { action in { action(tab.id) } },
                                 onColourChange: { colourChange?(tab.id, $0) }, onCopyResult: copyResult)
                                 .id(tab.id)
                                 .onDrag {

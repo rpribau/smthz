@@ -1,9 +1,9 @@
 import AppKit
 
-/// Native macOS menu; pane-layout actions remain unavailable until M3 A2.
+/// Native terminal and pane actions, routed to the owning pane.
 @MainActor
 final class SmthzTerminalContextMenu: NSObject {
-    enum Action: Int { case quickCommands, copy, selectAll, paste, copyTerminalID, copyPaneID, clear, reset }
+    enum Action: Int { case quickCommands, copy, selectAll, paste, copyTerminalID, copyPaneID, clear, reset, splitRight, splitDown, equalize, expand, setTitle }
     var perform: (Action) -> Void
     var runQuickCommand: (String) -> Void = { _ in }
 
@@ -30,12 +30,12 @@ final class SmthzTerminalContextMenu: NSObject {
         add("Add Quick Command…", icon: "plus", action: .quickCommands, to: submenu)
         quick.submenu = submenu; menu.addItem(quick)
         menu.addItem(.separator())
-        add("Split Terminal Right", icon: "panel-right-close", key: "d", enabled: false, to: menu)
-        add("Split Terminal Down", icon: "panel-bottom-close", key: "d", modifiers: [.command, .shift], enabled: false, to: menu)
-        add("Equalize Pane Sizes", icon: "panels-top-left", enabled: false, to: menu)
-        add("Expand Pane", icon: "minimize-2", key: "\r", modifiers: [.command, .shift], enabled: false, to: menu)
+        add("Split Terminal Right", icon: "panel-right-close", action: .splitRight, key: "d", enabled: paneID != nil, to: menu)
+        add("Split Terminal Down", icon: "panel-bottom-close", action: .splitDown, key: "d", modifiers: [.command, .shift], enabled: paneID != nil, to: menu)
+        add("Equalize Pane Sizes", icon: "panels-top-left", action: .equalize, enabled: paneID != nil, to: menu)
+        add("Expand Pane", icon: "minimize-2", action: .expand, key: "\r", modifiers: [.command, .shift], enabled: paneID != nil, to: menu)
         menu.addItem(.separator())
-        add("Set Title…", icon: "pencil", enabled: false, to: menu)
+        add("Set Title…", icon: "pencil", action: .setTitle, enabled: paneID != nil, to: menu)
         add("Copy Terminal ID", icon: "copy", action: .copyTerminalID, to: menu)
         add("Copy Pane ID", icon: "copy", action: .copyPaneID, enabled: paneID != nil, to: menu)
         menu.addItem(.separator())

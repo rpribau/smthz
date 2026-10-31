@@ -27,6 +27,9 @@ final class HostController {
     private var identity: ProcessIdentity?
     private var sessions: [SessionInfo] = []
     private var suppressed = false
+    // NSAlert must outlive its asynchronous sheet; releasing it can dismiss
+    // the sheet and deliver a default response before the user chooses.
+    private var confirmationAlert: NSAlert?
     private(set) var busy = false
     private(set) var label = "Connecting to host"
     private(set) var detail = "Checking the local host."
@@ -155,8 +158,13 @@ final class HostController {
         alert.alertStyle = .warning
         alert.addButton(withTitle: restart ? "Restart Host" : "Stop Host")
         alert.addButton(withTitle: "Cancel")
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+        // Menu activation can temporarily clear key/mainWindow. Prefer the
+        // visible workspace window rather than entering a nested app modal loop.
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow
+            ?? NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+            confirmationAlert = alert
             alert.beginSheetModal(for: window) { [weak self] response in
+                self?.confirmationAlert = nil
                 self?.busy = false
                 guard response == .alertFirstButtonReturn else { return }
                 self?.stop(expected: expected, restart: restart)
