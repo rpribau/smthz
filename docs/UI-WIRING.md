@@ -20,7 +20,8 @@ Implemented 2026-10-25; state ownership updated by WP-A0. ShellController now ap
 | App quit / last window close | Flush shell state; detached host and sessions continue | Real; quit exercised for A1 |
 | Cmd-T; tab `+` → New Terminal | `session.create`, select returned session, return from Settings/destinations | Real |
 | Tab `+` search → existing tab | Select session and display its replayed output | Real |
-| Tab `+` agent/browser/emulator/Markdown rows | Visible disabled choices with unavailable tooltips | Stub: M4/M5/WebKit/editor |
+| Tab `+` agent/emulator/Markdown rows | Visible disabled choices with unavailable tooltips | Stub: M4/M5/editor |
+| Tab `+` New Browser Tab | Opens an app-local WKWebView browser tab (WP-B1, see section below) | Real; menu only, the ⇧⌘B registry chord stays unavailable |
 | Cmd-W; tab close; exited-terminal Close | `session.foreground`, pinned/running confirmation when required, then `session.close`; remove closed tab locally | Real |
 | Pinned/running confirmation Cancel or Escape | Leave session open | Real |
 | Confirmation “Don't ask again” | Existing persisted confirmation preference | Real |
@@ -392,3 +393,78 @@ Verification: 10 new `@Test` (6 classifier: reasons, ready row, blocker table fo
 | Hook CLI packaging / UI | Standalone smthzd generates a hook command pointing to sibling smthz CLI; AgentLaunchService accepts an explicit hookExecutable | **App packaging follow-up:** sibling smthz inside the existing app bundle is the GUI executable; AG3b/app integration must bundle/select a dedicated CLI. No GUI work or real agent launch in AG2 |
 
 AG2 adds 14 `@Test`s; combined tree is 516 tests (492 baseline + AG2 14 + CLEANUP 10). Build and three consecutive final full suites pass. Private CLI/host E2E uses a fake Claude only; retry owns one session, ps shows a real tty, close reaps the child and host shutdown removes its socket. One earlier full run failed only `SessionStreamTests.slowConsumerFloodIsBoundedAndReplayHasNoGaps` at its 30-second eventually predicate; coordinator notified and full log preserved in `scratchpad/ag2-evidence/full1-stream-flake.log`, outside AG2 scope. Evidence: `scratchpad/ag2-evidence/e2e-final.json`; no live paid-agent, GUI, 20-second noisy-output cap or live Claude-compatible `--settings` conformance checks performed.
+
+## WP-AG3b AGENT-HOOK-RPC — 2026-10-31
+
+| Entry point | Behaviour | Verification / limits |
+|---|---|---|
+| `smthz hook --agent claude\|codex` | Reads stdin up to 1 MiB; uses launch env metadata and a scoped handshake-free RPC; normalizes payload to the status core's bounded prompt/tool previews before framing; prints `{}` and exits 0 on success, malformed input, missing/wrong credentials or unavailable host; independent 1.4 s deadline also covers an unclosed stdin | Fake-agent CLI tests and private standalone-host E2E; no real agent, global config edit, paid call or GUI check |
+| `agent.hook` | Real HostRouter mutation route; live session + agent + launch token + constant-time hook-token validation precedes dispatch; host capability cannot substitute for hook scope; request-id replay uses the existing mutation journal, which stores response and params hash (no raw credentials/payload) | Wrong/missing token, wrong launch, post-close scope, malformed payload and 900 kB tool-input tests; no model invocation |
+| `agent.status.list` / `HostClient.agentStatuses()` | Real read route, shared `AgentStatusStore` with AG3a hook/OSC precedence; wire rows expose `sessionID`, state name, optional `kind`, source, Unix timestamp and available hook/OSC metadata | Fake SessionStart metadata and working transition checked under 200 ms; transcript path exposed for the later reader/UI |
+| `agent.status.subscribe` / `HostClient.subscribeAgentStatuses()` | Real dedicated authenticated stream; initial full snapshot plus changed snapshots polled every 25 ms; shares existing subscriber cap; client buffers newest snapshot only and cancellation interrupts its dedicated connection | Initial empty snapshot followed by a hook update tested; no app UI binding in this WP |
+| SessionManager OSC 7501 | Stateful scanner sees fresh output only, keeps output bytes intact, updates the shared store, writes the protocol reply to live PTY input with a bounded write; log read/replay never re-scans or replies; process exit ends live states | Fake raw-PTY query receives exact reply bytes without an app; three replay requests inject no extra input; scanner split/precedence coverage remains in AG3a |
+| App packaging / agent UI | Existing bundle's sibling `smthz` remains the GUI executable; dedicated hook CLI bundling/selection and status UI are outside AG3b's allowed scope | Standalone host + sibling CLI verified; **bundled-host hook execution and real Claude/Codex hooks not verified** |
+
+AG3b verification: 9 new `@Test`s pass (focused and in every completed full-suite attempt); isolated Xcode build passes, `Package.swift` unchanged. Final private standalone-host/fake-Claude CLI E2E took 14 ms warm and received the exact OSC query reply; an earlier cold run under wave load took 216 ms, so the 200 ms end-to-end bound is not proven under load. Wrong/missing-token CLI cases return `{}` and exit 0 before 1.5 s, and an unclosed stdin is terminated by the independent deadline. No real agent, paid call, global config modification, GUI or bundled-host hook path was exercised. Full-suite totals grew from 559 to 614 as other workers landed tests; **three consecutive full passes were not obtained**: pre-existing `SessionStreamTests` produced `.closed` at lines 73/87 and a 30-second predicate timeout at line 34; the latest 614-test run also hit `AgentLaunchTests.swift:109` (quiet marker observed before trailing bracket-paste terminator) and `WebSocketTransportTests.swift:64` (`concurrentClients`, `.timedOut`). A browser-cookie expiry assertion also failed once before its author corrected it. Coordinator explicitly instructed AG3b to stop pursuing wave-load failures and finish with focused tests plus E2E; the in-progress explicit `--no-parallel` attempt was stopped, and the coordinator owns final full-suite verification.
+
+## WP-B1 browser pane (2026-10-31)
+
+Files: `Sources/SmthzApp/Browser/{BrowserTabModel,BrowserPaneView,BrowserToolbar,BrowserFind,BrowserDialogs,BrowserDownloadsShelf}.swift`, `Sources/SmthzCore/Browser/BrowserURLInput.swift` (+12 tests in `BrowserURLInputTests.swift`). Hooks: `ShellView.swift` only (tab strip items merge, select/close routing, `+` menu browser action, workspace surface, `newShell` leaves the browser surface). WKWebView public API only, default `WKWebsiteDataStore` (profiles are WP-B2).
+
+| Entry point | Result | Status |
+|---|---|---|
+| `+` > New Browser Tab | New tab "New Tab" after the terminal tabs, address bar focused | Real, exercised in the app |
+| Address bar | Orca normalisation: localhost/IP:port -> http, domains -> https, absolute paths -> file, words -> search (Google default; engine picker in the page menu, not persisted); `javascript:` etc. rejected with a banner | Real; localhost load and `javascript:` rejection exercised, search fallback unit-tested only (no network use) |
+| Back/forward/reload/stop, ⌘[ ⌘] ⌘R, ⇧⌘R hard reload, ⌘L | Toolbar buttons and a key monitor active only while a browser tab is shown | Real; ⌘L and back exercised, ⌘[ ⌘] ⌘R ⇧⌘R not exercised |
+| ⌘F find bar | `WKWebView.find`, Return/⇧Return/arrows, Aa case toggle, Esc closes | Real, exercised (focus, next match, Esc) |
+| Zoom ⌘= ⌘- ⌘0, badge | Chrome presets 25-500% via `pageZoom`; badge resets | Real; ⌘= x2 -> 125% exercised. These chords shadow the UI zoom menu while a browser tab is shown |
+| Popups (`window.open`, target=_blank) | Open as new browser tabs with the opener configuration | Real, exercised |
+| Downloads shelf | ~/Downloads with unique names, progress, cancel, open, Show in Finder, Clear | Real; download + Done exercised (macOS asked for Downloads access once and it was allowed); cancel/open/reveal not clicked |
+| alert/confirm/prompt sheets | smthzDialog sheets held until answered; closing the tab cancels | Real; confirm and prompt exercised, alert not clicked |
+| HTTP Basic/Digest/NTLM auth sheet | Username/password, session-only credential | Real; Basic exercised against a local server |
+| `<input type=file>` | NSOpenPanel sheet | Real code; not exercised |
+| Page menu: Allow Web Inspector, Copy Address, Open in Default Browser, Reopen Closed Browser Tab | `isInspectable`, pasteboard, http(s)-only external open, last 20 closed URLs | Real code; not exercised |
+| Tab close / select | × closes the tab (no confirmation); selecting a terminal tab or ⌘T returns to terminals | Real, exercised |
+
+Limits: browser tabs are not persisted across relaunch (ShellModel has no browser tab kind), cannot be split, grouped, pinned, renamed or coloured (those context-menu items are no-ops for browser ids), show the terminal glyph in the tab strip, and keyboard tab cycling only walks terminal tabs. Browser chords are hard-coded Orca defaults; the registry entries `browser.*` and `tab.newBrowser` remain unavailable.
+
+
+## WP-B2 BROWSER-PROFILES (2026-10-31, core only, not wired)
+
+Files: `Sources/SmthzCore/Browser/{BrowserProfileStore,BrowserCookieImportChrome,BrowserCookieImportSafari,BrowserCookieImportFirefox,ChromiumCookieCrypto}.swift`, tests `BrowserProfileStoreTests`, `BrowserCookieCryptoTests`, `BrowserCookieImport{Chrome,Firefox,Safari}Tests` (40 tests). Pure SmthzCore: no app, HostService or CLI hooks. No UI or WKWebsiteDataStore calls exist yet; the B1 pane still uses the default data store.
+
+| Piece | Behaviour | Status |
+|---|---|---|
+| `BrowserProfileStore` | `<state-dir>/browser-profiles.json` (0600, atomic rename): built-in `default` + isolated/imported profiles (id, label, kind, data-store UUID, import source); create/rename/setDefault/resetDefault; delete deferred while views are attached (`attach`/`detach`), `pendingDataStoreRemovals` survive restarts until `markDataStoreRemoved`; corrupt/future files backed up | Core real, unit-tested; not wired (app must call `WKWebsiteDataStore(forIdentifier:)`/`remove(forIdentifier:)`) |
+| Chromium import (Chrome, Edge, Arc, Brave, Comet, Helium) | Local State profile discovery, `Network/Cookies` or legacy `Cookies`, private copy of DB + WAL/SHM, PBKDF2-SHA1 + AES-128-CBC v10/v11 via CommonCrypto, host-hash and HMAC prefix strip, v20 (app-bound) counted as undecryptable, Keychain read lazily only if an encrypted row exists | Real against self-encrypted fixtures; **never run against a real Chrome profile or the real Keychain** (`KeychainChromiumKeyProvider` untested) |
+| Firefox import | `moz_cookies` with optional columns, `default-release` first, expiry in seconds or milliseconds | Fixture-tested only |
+| Safari import | `Cookies.binarycookies` parser (bounds-checked, truncation/byte-flip fuzzed), EPERM/EACCES -> `permissionDenied` (Full Disk Access) | Fixture-tested only; real Safari container not read |
+| Filters / output | `google.com` and subdomains excluded (Orca NON_TRANSPLANTABLE), expired and invalid-domain rows skipped, counters; `BrowserImportedCookie.httpCookie` -> `HTTPCookie` for `WKHTTPCookieStore.setCookie` | Real; Foundation clamps expiry to 400 days |
+
+Differences from Orca: domain validation is a simple host check, not a public-suffix list (single-label hosts except localhost are rejected); no partition (CHIPS) handling, no "replace imported domains" clear of the target jar, no Linux/Windows key paths. Those belong to the app-side import step (B3/B4).
+
+## WP-B3 BROWSER-PROTOCOL+CLI, first half (2026-10-31, core + CLI file only, not wired)
+
+Files: `Sources/SmthzCore/Browser/{BrowserAutomationProtocol,BrowserCommandParser}.swift`, `Sources/smthz/BrowserCommands.swift`, tests `BrowserAutomationProtocolTests.swift` (8) and `BrowserCommandParserTests.swift` (6). `HostService`, `HostClient`, `main.swift` and `Package.swift` were not edited.
+
+| Entry point | Result | Status |
+|---|---|---|
+| `BrowserCommand` (80 cases = Orca `path:` entries, alias `identity show`) | Orca RPC method name, A.4 support (56 full / 23 partial / 1 unsupported), A.5 reduction id, result kind, required/optional arguments, target scope | Real; unit-tested |
+| `BrowserRequest {command, target{worktree,page,cwd}, arguments}` | Codable, validated on init and decode (unknown command, missing/extra argument, ranges, empty values as Orca) | Real; round-trip tested for every command |
+| `BrowserResult` (`{"kind","data"}`, 18 kinds incl. `unsupported`) | Typed payloads: action (with `trusted`, R-B1), navigation, snapshot, image, pdf, value, tabs, profiles, cookies, console, network (`source`, R-B3), intercept, capture, viewport (`ignored`, R-B6), identity | Real types; no producer exists yet (B4) |
+| `BrowserCommandParser.parse` | Orca grammar: `--f v`, `--f=v`, switches, words anywhere; client defaults (`scope isolated`, `set offline` = on, `use-default` = `default`); per-command `--help` and overview | Real; unit-tested |
+| `runBrowserCommand(args:defaultSocket:)` / `BrowserCommands.run` | `exec` -> error `unsupported` (R-B9) without contacting the host; others send `rawCall(method: browser.*, params: BrowserRequest)`, host `unknownMethod` -> `browserUnavailable`; `--json` or text summaries | Compiles; **not exercised**: no dispatch line in `main.swift` yet (coordinator), and the host has no `browser.*` forwarding or provider (B3 second half) |
+
+## WP-CHAT0 TRANSCRIPT VIEW (2026-10-31, core + standalone view, not wired)
+
+Core `Sources/SmthzCore/Chat/Transcript{Reader,ClaudeDecoder,CodexDecoder}.swift`; view `Sources/SmthzApp/Chat/ChatTranscript{Model,View}.swift`. No ShellView/tab-strip/HostService/Package.swift edits.
+
+| Entry point | Result | Status |
+|---|---|---|
+| `TranscriptReader(url:format:).readAvailable()` | Offset-based tail of a growing JSONL: reads only new bytes, holds a partial last line until `\n`, CRLF tolerant, resets on truncation or inode change (`didReset`), skips lines over 8 MiB, offset fallback ids `<path>:<16 digits>` (Orca `transcriptFallbackId`) | Real; 10 reader tests (split at many byte offsets, no re-read via `totalBytesRead`, truncate/replace, oversize, invalid UTF-8) |
+| `TranscriptClaudeDecoder` | Orca `transcript-line-decoders-claude.ts`: user/assistant text, `thinking` -> reasoning row, `tool_use`/`tool_result` (tool-only user record -> tool row), meta/synthetic turns keep only tool results, interrupt -> "Conversation interrupted", queued prompts, `<bash-input>` -> `!cmd` | Real; 7 tests on hand-written fixtures. Not ported: edit-patch hunks, pasted-content and image-companion unwrapping |
+| `TranscriptCodexDecoder` | Orca `transcript-line-decoders-codex.ts`: `response_item` message/reasoning/function/custom/local-shell calls and outputs, `event_msg` user/agent message, `item_completed`, `turn_aborted`, legacy unwrapped records | Real; 6 tests. Deviation: also hides `<environment_context>`/`<user_instructions>`/AGENTS.md preamble user blocks (Orca hides only `<skill>`) |
+| `TranscriptLog` | Ordered rows, upsert by id, drops a text row repeating one of the last 6 same-role rows (Codex writes each turn twice) | Real; tested. Sanity-run on one real local Claude and one Codex file (counts only, no content copied): no oversize skips, Codex prompt shown once |
+| `ChatTranscriptEntryView(transcriptURL:format:onSend:)` | Owns `ChatTranscriptModel`; tails every 400 ms on a background actor while visible (`onAppear`/`onDisappear`), auto-scrolls on new rows; user bubbles, assistant markdown (inline), collapsible "Thinking", collapsible tool call/result cards (error tint), system status line, empty state, composer that calls `onSend(text)` | View built; rows rendered offscreen (ImageRenderer) in light and dark and checked by eye. **Not run inside the app**: not reachable from any UI, composer never exercised, scrolling/live tail not seen on screen |
+| `#Preview("Chat transcript • light")`, `#Preview("Chat transcript • dark, empty")` | `ChatTranscriptModel.sample` / empty model | Previews compile; not opened in Xcode canvas |
+| **Hook for the integrating WP** | For an agent tab whose status row has `transcriptPath` (AG3b SessionStart): show `ChatTranscriptEntryView(transcriptURL: URL(fileURLWithPath: path), format: .claude or .codex, onSend: { text in session.write(text + "\r") })` behind a Chat/Terminal toggle in the tab; Codex rollout path discovery (no hook path) is still open | Stub (not wired this wave) |

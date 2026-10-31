@@ -62,6 +62,35 @@ public struct HostSessionList: Decodable, Sendable {
     public let sessions: [SessionInfo]
 }
 
+/// Stable status wire representation; state and blocked kind have separate names.
+public struct HostAgentStatusRow: Codable, Equatable, Sendable {
+    public let sessionID: String
+    public let state: String
+    public let kind: AgentBlockKind?
+    public let source: AgentStatusSource
+    public let updatedAt: Double
+    public let agent: AgentHookSource?
+    public let app: String?
+    public let lastEventName: String?
+    public let toolName: String?
+    public let toolInputPreview: String?
+    public let prompt: String?
+    public let providerSessionID: String?
+    public let transcriptPath: String?
+    public let title: String?
+    public let message: String?
+    public let progress: Int?
+
+    init(_ row: AgentStatusRow) {
+        sessionID = row.sessionID; state = row.state.name; kind = row.state.blockKind
+        source = row.source; updatedAt = row.updatedAt.timeIntervalSince1970
+        agent = row.agent; app = row.app; lastEventName = row.lastEventName
+        toolName = row.toolName; toolInputPreview = row.toolInputPreview; prompt = row.prompt
+        providerSessionID = row.providerSessionID; transcriptPath = row.transcriptPath
+        title = row.title; message = row.message; progress = row.progress
+    }
+}
+
 /// A synchronous connection. Calls and disconnect must be serialized by its owner.
 public final class HostClient {
     private struct DetailedStatus: Decodable { let ok: Bool; let error: String?; let detail: String? }
@@ -156,6 +185,92 @@ public final class HostClient {
                     @unknown default: return
                     }
                     if event.exit != nil { break }
+                }
+                continuation.finish()
+            } catch { continuation.finish(throwing: error) }
+        }
+    }
+
+    public func agentStatuses() throws -> [HostAgentStatusRow] {
+        struct Empty: Encodable {}
+        struct Result: Decodable { let statuses: [HostAgentStatusRow] }
+        let result: Result = try call(method: "agent.status.list", params: Empty())
+        return result.statuses
+    }
+
+    /// Scoped, handshake-free hook submission. The token cannot authorize another method.
+    public static func sendAgentHook(socketPath: String, sessionID: String, agent: String,
+                                     launchToken: String, hookToken: String, source: AgentHookSource,
+                                     payload: Data) throws {
+        let socket = try UnixSocketClient(path: socketPath)
+        defer { socket.close() }
+        // Drop unrelated raw fields and send the same bounded previews the host
+        // stores. A valid 1 MiB tool payload must fit the framed RPC as well.
+        guard let hook = try? AgentHookPayload(source: source, json: payload) else {
+            throw HostClientError.hostError(code: "badRequest")
+        }
+        var fields: [String: HostJSON] = ["hook_event_name": .string(hook.eventName),
+                                         "is_interrupt": .bool(hook.isInterrupt)]
+        let strings: [String: String?] = ["session_id": hook.providerSessionID,
+            "transcript_path": hook.transcriptPath, "cwd": hook.cwd, "tool_name": hook.toolName,
+            "tool_input": hook.toolInputPreview, "tool_use_id": hook.toolUseID, "prompt": hook.prompt,
+            "source": hook.sessionSource, "agent_id": hook.childAgentID, "model": hook.model,
+            "trigger": hook.trigger]
+        for (key, value) in strings { if let value { fields[key] = .string(value) } }
+        let json = HostJSON.object(fields)
+        let params: [String: HostJSON] = ["sessionID": .string(sessionID), "agent": .string(agent),
+            "launchToken": .string(launchToken), "source": .string(source.rawValue), "payload": json]
+        let request = RPCEnvelope(version: RPCEnvelope.currentVersion,
+            requestID: RequestID.generate().rawValue, method: "agent.hook",
+            payload: try JSONEncoder().encode(params), authorization: hookToken, timeoutMilliseconds: 1000)
+        let envelope = try JSONDecoder().decode(RPCEnvelope.self,
+            from: socket.request(JSONEncoder().encode(request), timeout: 1))
+        guard envelope.requestID == request.requestID, envelope.method == request.method,
+              envelope.version == request.version else { throw HostClientError.invalidResponse }
+        let status = try JSONDecoder().decode(Status.self, from: envelope.payload)
+        guard status.ok else { throw HostClientError.hostError(code: status.error ?? "unknownError") }
+    }
+
+    /// A dedicated bounded status stream. Dropped snapshots are replaced by the newest snapshot.
+    public func subscribeAgentStatuses() -> AsyncThrowingStream<[HostAgentStatusRow], any Error> {
+        let socket = socketPath, token = capabilityTokenPath
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let worker = AgentStatusSubscription(socket: socket, token: token, continuation: continuation)
+            continuation.onTermination = { [weak worker] _ in worker?.cancel() }
+            Thread.detachNewThread { worker.run() }
+        }
+    }
+
+    private final class AgentStatusSubscription: @unchecked Sendable {
+        let socket: String
+        let token: String?
+        let continuation: AsyncThrowingStream<[HostAgentStatusRow], any Error>.Continuation
+        let lock = NSLock()
+        var cancelled = false
+        var client: HostClient?
+        init(socket: String, token: String?,
+             continuation: AsyncThrowingStream<[HostAgentStatusRow], any Error>.Continuation) {
+            self.socket = socket; self.token = token; self.continuation = continuation
+        }
+        func cancel() { lock.withLock { cancelled = true; client?.transport.interrupt() } }
+        func run() {
+            do {
+                let connection = try HostClient(socketPath: socket, capabilityTokenPath: token)
+                defer { lock.withLock { client = nil }; connection.disconnect() }
+                guard !lock.withLock({ client = connection; return cancelled }) else { continuation.finish(); return }
+                struct Empty: Encodable {}
+                struct Snapshot: Decodable { let statuses: [HostAgentStatusRow] }
+                let id = RequestID.generate().rawValue
+                let initial: Snapshot = try connection.call(method: "agent.status.subscribe", params: Empty(), requestID: id)
+                continuation.yield(initial.statuses)
+                while !lock.withLock({ cancelled }) {
+                    let envelope = try JSONDecoder().decode(RPCEnvelope.self, from: connection.transport.receive())
+                    guard envelope.version == RPCEnvelope.currentVersion, envelope.requestID == id,
+                          envelope.method == "agent.status.subscribe" else { throw HostClientError.invalidResponse }
+                    let status = try JSONDecoder().decode(Status.self, from: envelope.payload)
+                    guard status.ok else { throw HostClientError.hostError(code: status.error ?? "unknownError") }
+                    let snapshot = try JSONDecoder().decode(Snapshot.self, from: envelope.payload)
+                    if case .terminated = continuation.yield(snapshot.statuses) { return }
                 }
                 continuation.finish()
             } catch { continuation.finish(throwing: error) }

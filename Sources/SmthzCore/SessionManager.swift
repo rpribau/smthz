@@ -51,6 +51,17 @@ public final class SessionManager: @unchecked Sendable {
     private let lock = NSLock()
     private var sessions: [String: Record] = [:]
     private var stopped = false
+    private let statusLock = NSLock()
+    private var agentStatuses = AgentStatusStore()
+
+    public func applyAgentHook(_ payload: AgentHookPayload, sessionID: String) {
+        statusLock.withLock { agentStatuses.applyHook(payload, sessionID: sessionID) }
+    }
+
+    public func agentStatusRows() -> [AgentStatusRow] {
+        statusLock.withLock { agentStatuses.rows() }
+    }
+
     private let exitMonitor: DispatchSourceTimer
 
     /// Disk retention is opt-in, bounded per session, and independent of the
@@ -71,6 +82,7 @@ public final class SessionManager: @unchecked Sendable {
         let child: PTYSession
         let info: SessionInfo
         let lock = NSCondition()
+        var scanner = ProgramStatusScanner()
         var output = Data()
         var end: UInt64 = 0
         let disk: Scrollback?
@@ -145,7 +157,20 @@ public final class SessionManager: @unchecked Sendable {
         let record = Record(child: child, id: id, disk: disk, executable: executable,
                             arguments: arguments, cwd: cwd, createdAt: createdAt)
         let limit = outputLimit
-        child.setOutputHandler { [weak record] in record?.append($0, limit: limit) }
+        child.setOutputHandler { [weak record, weak self] bytes in
+            guard let record else { return }
+            record.append(bytes, limit: limit)
+            // Only fresh PTY output reaches this scanner. Reading/replaying the log
+            // never scans bytes and therefore cannot inject a second query reply.
+            let scan = record.scanner.scan(bytes)
+            self?.statusLock.withLock {
+                self?.agentStatuses.applyProgramStatus(scan.events, sessionID: id)
+            }
+            if let reply = scan.reply {
+                let deadline = Date(timeIntervalSinceNow: 0.1)
+                try? record.child.write(Data(reply), shouldCancel: { Date() >= deadline })
+            }
+        }
         lock.lock()
         do {
             try lifecycle("session.create", record: record)
@@ -319,6 +344,7 @@ public final class SessionManager: @unchecked Sendable {
 
     private func journalClose(_ record: Record) throws {
         guard !record.closeJournaled else { return }
+        statusLock.withLock { agentStatuses.sessionExited(record.info.id) }
         do { try lifecycle("session.close", record: record); record.closeJournaled = true }
         catch { throw SessionError.journalFailure }
     }

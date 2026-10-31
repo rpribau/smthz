@@ -380,7 +380,7 @@ struct ShellView: View {
         }
     }
     private var tabs: some View {
-        TabStripView(tabs: model.tabs, select: select, close: close,
+        TabStripView(tabs: BrowserTabStore.shared.merge(model.tabs), select: select, close: close,
             rename: { model.rename($0, title: $1) }, togglePin: model.togglePin, reorder: model.reorder,
             split: { id, down in model.splitSession(id, side: down ? .bottom : .right) },
             moveToPane: { id, side in if let side = PaneSide(rawValue: side) { model.moveSession(id, side: side) } },
@@ -406,8 +406,9 @@ struct ShellView: View {
            ("emulator", "New Mobile Emulator", "smartphone", .tabNewSimulator),
            ("markdown", "New Markdown", "file-plus", .tabNewMarkdown), ("open-markdown", "Open Markdown...", "file-text", .tabOpenMarkdown)]
             .map { id, title, icon, action in
-                TabCreateAction(id: id, title: title, icon: .init(rawValue: icon), enabled: false,
-                                shortcut: SmthzKeybindings.shared.label(action), unavailableReason: "Not available yet", perform: {})
+                TabCreateAction(id: id, title: title, icon: .init(rawValue: icon), enabled: id == "browser",
+                                shortcut: SmthzKeybindings.shared.label(action), unavailableReason: id == "browser" ? nil : "Not available yet",
+                                perform: id == "browser" ? { settingsPage = nil; returnToWorkspace(); BrowserTabStore.shared.newTab() } : {})
             }
     }
     @ViewBuilder private var workspace: some View {
@@ -416,7 +417,7 @@ struct ShellView: View {
         case .automations: SmthzAutomationsPage(onClose: returnToWorkspace)
         case .activity: SmthzMobilePage(onClose: returnToWorkspace)
         case .workspaces:
-            if !model.hostIsRunning {
+            if let browser = BrowserTabStore.shared.activeTab { BrowserPaneView(store: .shared, tab: browser) } else if !model.hostIsRunning {
                 LandingView(variant: .hostNotRunning, bindings: SmthzKeybindings.shared.registry,
                     onStartHost: { HostController.shared.start(); monitorGeneration += 1 },
                     onRetry: { HostController.shared.start(); monitorGeneration += 1 })
@@ -526,10 +527,11 @@ struct ShellView: View {
     private func dismiss() { overlay = nil }
     private func returnToWorkspace() { appModel.destination = .workspaces }
     private func select(_ id: String) {
+        if BrowserTabStore.shared.select(id) { settingsPage = nil; returnToWorkspace(); return } else { BrowserTabStore.shared.deactivate() }
         model.selectedSessionID = id; settingsPage = nil; returnToWorkspace()
     }
     private func newShell() {
-        settingsPage = nil; returnToWorkspace(); Task { await model.newShell() }
+        BrowserTabStore.shared.deactivate(); settingsPage = nil; returnToWorkspace(); Task { await model.newShell() }
     }
     private func closePane(_ pane: PaneID, _ tab: TabID) {
         guard let record = model.workspace.panes[pane], let session = record.binding?.sessionID else { return }
@@ -541,6 +543,7 @@ struct ShellView: View {
         }
     }
     private func close(_ id: String) {
+        if BrowserTabStore.shared.close(id) { return }
         Task {
             await confirmations.confirmClose(sessionID: id, socketPath: model.socketPath,
                 tabLabel: model.title(id), isPinned: model.pinned.contains(id)) {

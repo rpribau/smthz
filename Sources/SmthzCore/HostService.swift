@@ -143,13 +143,34 @@ public final class HostService: @unchecked Sendable {
             let session = try launcher.launch(request, checkCancellation: { try context.checkCancellation() })
             return try JSONDecoder().decode([String: HostJSON].self, from: JSONEncoder().encode(session))
         }
+        router.register("agent.hook", methodClass: .mutation, repository: { _ in nil }) { params, _ in
+            guard let id = params["sessionID"]?.string,
+                  let source = params["source"]?.string.flatMap(AgentHookSource.init(rawValue:)),
+                  let json = params["payload"] else { throw HostRPCError("badRequest") }
+            let payload: AgentHookPayload
+            do { payload = try AgentHookPayload(source: source, json: JSONEncoder().encode(json)) }
+            catch { throw HostRPCError("badRequest") }
+            sessions.applyAgentHook(payload, sessionID: id)
+            return [:]
+        }
+        for method in ["agent.status.list", "agent.status.subscribe"] {
+            router.register(method, methodClass: .read, repository: { _ in nil }) { params, _ in
+                guard params.isEmpty else { throw HostRPCError("badRequest") }
+                return try Self.agentStatusFields(sessions)
+            }
+        }
+    }
+
+    private static func agentStatusFields(_ sessions: SessionManager) throws -> [String: HostJSON] {
+        let rows = sessions.agentStatusRows().map(HostAgentStatusRow.init)
+        return ["statuses": try JSONDecoder().decode(HostJSON.self, from: JSONEncoder().encode(rows))]
     }
 
     /// Consumes a dedicated connection. Socket writes provide back-pressure;
     /// subscriber state is only a cursor, never an unbounded queue of PTY bytes.
     public func stream(_ payload: Data, send: (Data) throws -> Void, cancelled: () -> Bool) -> Bool {
         guard let request = try? JSONDecoder().decode(RPCEnvelope.self, from: payload),
-              request.method == "session.subscribe" else { return false }
+              ["session.subscribe", "agent.status.subscribe"].contains(request.method) else { return false }
         let admitted = stateLock.withLock {
             guard subscribers < Self.maximumSubscribers else { return false }
             subscribers += 1
@@ -166,6 +187,25 @@ public final class HostService: @unchecked Sendable {
             let envelope = try JSONDecoder().decode(RPCEnvelope.self, from: acknowledgement)
             struct Status: Decodable { let ok: Bool }
             guard try JSONDecoder().decode(Status.self, from: envelope.payload).ok else { return true }
+            if request.method == "agent.status.subscribe" {
+                struct Snapshot: Decodable { let statuses: [HostAgentStatusRow] }
+                var previous = try JSONDecoder().decode(Snapshot.self, from: envelope.payload).statuses
+                // Initial state is already in the acknowledgement. Poll bounded shared
+                // state, never enqueue an unbounded history for a slow subscriber.
+                while !cancelled() && !stateLock.withLock({ stopped }) {
+                    Thread.sleep(forTimeInterval: 0.025)
+                    let rows = sessionManager.agentStatusRows().map(HostAgentStatusRow.init)
+                    if rows != previous {
+                        var fields = try Self.agentStatusFields(sessionManager)
+                        fields["ok"] = .bool(true)
+                        try send(JSONEncoder().encode(RPCEnvelope(version: RPCEnvelope.currentVersion,
+                            requestID: request.requestID, method: request.method,
+                            payload: JSONEncoder().encode(fields))))
+                        previous = rows
+                    }
+                }
+                return true
+            }
             let params = try JSONDecoder().decode(SubscribeParams.self, from: request.payload)
             var cursor = params.fromCursor
             while !cancelled() {
@@ -216,7 +256,18 @@ public final class HostService: @unchecked Sendable {
             }
             return response(to: request, body: Body(ok: true, credential: credential))
         }
-        guard HostCapabilityToken.matches(request.authorization, credential) else {
+        if request.method == "agent.hook" {
+            // Hook credentials are scoped to this live launch and this method only.
+            guard let params = try? JSONDecoder().decode([String: HostJSON].self, from: request.payload),
+                  let id = params["sessionID"]?.string, let token = request.authorization,
+                  let scope = agentLaunch.scope(sessionID: id, hookToken: token),
+                  params["agent"]?.string == scope.agent.rawValue,
+                  HostCapabilityToken.matches(params["launchToken"]?.string, scope.launchToken),
+                  let source = params["source"]?.string,
+                  source == (scope.agent == .codex ? "codex" : "claude") else {
+                return response(to: request, body: Body(ok: false, error: "unauthorized"))
+            }
+        } else if !HostCapabilityToken.matches(request.authorization, credential) {
             return response(to: request, body: Body(ok: false, error: "unauthorized"))
         }
         let timeout = request.timeoutMilliseconds ?? 5_000

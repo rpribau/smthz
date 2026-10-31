@@ -119,6 +119,7 @@ func attach(_ client: HostClient, id: String) throws {
 func run() throws {
     let arguments = Array(CommandLine.arguments.dropFirst())
     let command = arguments.first ?? "--help"
+    if command == "hook" { HookCommand.run(arguments: Array(arguments.dropFirst())); return }
     var rest = Array(arguments.dropFirst())
     let home = getpwuid(getuid()).map { URL(fileURLWithPath: String(cString: $0.pointee.pw_dir)) }
         ?? FileManager.default.homeDirectoryForCurrentUser
