@@ -53,8 +53,8 @@ Implemented 2026-10-25; state ownership updated by WP-A0. ShellController now ap
 | Jump palette projects/tasks | No fabricated project/task rows | Stub: M4/providers |
 | Cmd-P; View → Go to File | Bounded file scan under selected session cwd | Real listing |
 | File palette Open | Informational toast “File editor — Not available yet”; no external application opens | Stub: editor |
-| Cmd-N; sidebar New workspace; landing Create workspace; project header `+` | NewWorkspaceComposer | Real presentation |
-| Composer Create with no project | Create host shell; existing Create more behaviour retained | Real fallback; project/worktree creation stub |
+| Cmd-N; sidebar New workspace; landing Create workspace; project header `+` | NewWorkspaceComposer, preselecting the active (or header's) Git project | Real (WP-M4-WORKTREE-APP); see that section |
+| Composer Create with no project | Create host shell; existing Create more behaviour retained | Real fallback (only when no Git project is registered) |
 | Composer Add project / Agent settings | AddProjectDialog / Settings → Agents | Real routing; backends stub |
 | Sidebar / landing Add project; onboarding Add project | AddProjectDialog | Real routing |
 | Add Project Browse folder | NSOpenPanel → `repo.scanNested` → `repo.add` (Git repo or plain folder), or the nested-import view (`projectGroup.importNested`, group or separate, "Add folder only") | Real (WP-M4-REGISTRY); see that section for what was exercised |
@@ -62,8 +62,8 @@ Implemented 2026-10-25; state ownership updated by WP-A0. ShellController now ap
 | Default workspace select; Reveal active workspace | Return to Default workspace | Real; one card only |
 | Workspace Update/inline rename, Pin, Mark Read/Unread | Window-local card state | Real presentation state |
 | Workspace Open in Finder / Copy Path / Copy Worktree Name | Selected cwd and pasteboard actions | Real |
-| Workspace Remove Workspace / hover delete | DeleteWorkspaceDialog; confirming only emits unavailable toast | Stub: M4; never deletes files |
-| Workspace sleep/status/parent; project icon/group/remove/settings | Project header menu: Remove Project is real (`repo.remove`, refused with a toast while terminals run inside it, files never deleted); other entries disabled | Remove real (WP-M4-REGISTRY); rest stub: M4 WORKTREE-APP |
+| Workspace Remove Workspace / hover delete | Worktree cards: DeleteWorkspaceDialog → `worktree.remove` (WP-M4-WORKTREE-APP). Default workspace: unavailable toast | Real for worktrees; Default workspace stub |
+| Workspace sleep/status/parent; project icon/group/remove/settings | Project header menu: Remove Project is real (`repo.remove`, refused with a toast while terminals run inside it, files never deleted). Card menu: Edit details/parent, Remove from Parent, Repository Settings, Review Preserved Branches real (WP-M4-WORKTREE-APP); Sleep, Move to Status, Open Parent, project icon/group entries disabled | Partly real; Sleep/status stub |
 | Workspace options menu | Existing locally persisted sort/group/filter settings | Real preference; multiple-workspace effects deferred |
 | Sidebar activity / board | Existing visual activity empty state / board button state | Stub: agents/board backend |
 | Tasks nav/provider glyphs | SmthzTasksPage | Stub: providers; glyph route opens Tasks, provider selection remains local to page |
@@ -323,3 +323,45 @@ Verification: **25 new tests; 433 tests passed serially twice** (`swift test --n
 | Opening files (M4-D8, **INTERIM** until M4-EDITOR) | `InterimFileOpener`: executables, scripts, apps, bundles, packages, disk images and unknown types → Reveal in Finder; documents (text, images, PDF, media, office, JSON/XML/YAML…) → default app. Labelled in the palette footer, Search summary and Explorer menu ("Open with Default App" / "Reveal Executable in Finder") | Not exercised |
 
 Verification: build OK (app + host + tests, Xcode toolchain, own scratch path). New tests: **14** (`FileOperationsTests` 7, `FileSearchTests` 7). Full suite 433/434 tests: passes, but not 3 consecutive times: `PTYSessionTests.twentySessionsDoNotLeakDescriptors` (process-wide fd count) failed in 2 of 3 runs **even with both FILES suites skipped** (`--skip`), and `SessionDurabilityTests.replaysMoreThanFourMiBFromDiskAndAfterTeardown` failed once; neither touches FILES code. **GUI checks not done**: the app copy launched with a private host and a registered private repo, but the screen was locked (`CGSSessionScreenIsLocked`, loginwindow) before a window could be driven: Explorer New File/Rename/Delete/⌘Z, ⌘⇧F, ⌘P and the external-touch refresh were not seen on screen. The 38k-file ⌘P E2E was not run (paging tested with 6,005 paths).
+
+## WP-AG3a AGENT-STATUS-CORE — 2026-10-31
+
+Pure SmthzCore, nothing wired yet: no host RPC (`agent.hook`, `agent.status.list`), no `SessionManager` scanning, no `smthz hook` command and no UI use these types until AG3b/AG4.
+
+| Entry / component | State | Exercised |
+|---|---|---|
+| `Agents/ProgramStatusScanner.swift` | Real: OSC 7501 grammar ported from Orca `protocol.ts` (states/kinds/id/progress/app/base64 `msg`/`title` caps) and stateful `osc-scanner.ts` (carry across chunks, 4096-byte sequence cap, BEL/ST/CAN/SUB, OSC 133;A prompt-start, RIS). `scan(_:replaying:)` returns events + `queryDetected` + the reply bytes (`ProgramStatusProtocol.queryReply`, verbatim from `protocol.ts`), reply nil while replaying. Deviation: partial-marker carry window is 8 bytes (longest marker) instead of Orca's 7, so `ESC]133;` split before `A` is not lost | Tests only: split at every byte offset + byte-at-a-time of a sample stream, offsets, cap, abort, parse table, replay suppression |
+| `Agents/AgentHookPayload.swift` | Real: stdin JSON decode (≤ 1 MiB, object only, `hook_event_name`), session/transcript/cwd/tool/tool_use_id/prompt/source/agent_id/trigger, tool-input preview (subset of Orca's per-tool keys + fallback keys, 160 chars), prompt 200 chars. Event→state for Claude (13 events) and Codex (9 events incl. `Interrupt`) per Orca `claude-events.ts`/`codex-state.ts`, simplified: child (subagent/teammate) events carry metadata only, no child roster; StopFailure → `error`; SessionStart(startup/resume/clear) and SessionEnd → `idle` | Tests only (synthetic payloads; no payload from a real `claude`/`codex` run) |
+| `Agents/AgentStatusStore.swift` | Real value type: per-session hook record + OSC record set (256-record LRU, clear subtree, end-program on prompt-start/exit keeps done/error, reset on RIS). Precedence ported from `hook-precedence.ts`: hook wins unless OSC disagrees and hooks were silent ≥ 2 min, or another app reports after the hook agent is done. States `idle/working/blocked(kind)/done/error`. Not persisted, no subscribe stream (AG3b) | Table test (28 transitions) + metadata/row tests |
+| `Agents/ClaudeHookSettings.swift` | Real: `json(command:timeoutSeconds:)` builds the `--settings` document for the 13 Claude events (matcher `*` on the 4 tool events, timeout 10 s like Orca), `hookCommand(executablePath:)` shell-quotes the path. Writing the file (0600) and passing `--settings` is AG2 | Tests parse the JSON; not passed to a real `claude` |
+
+Verification: 23 new `@Test` (scanner 9, payload 6, store 5, settings 3). The shared tree's `SmthzApp` target did not compile at verification time because of another worker's in-progress files (`Workspaces/WorktreeLifecycleModel.swift`), so the suite ran from a private copy of the package with the app target removed: 488 tests passed 3 consecutive runs (includes AG1's 21 new tests).
+
+## WP-M4-WORKTREE-APP — 2026-10-31
+
+Files: `Dialogs/NewWorkspaceComposer.swift`, `Dialogs/DeleteWorkspaceDialog.swift`, new `Dialogs/EditWorkspaceDialog.swift`, `Dialogs/SetupApprovalDialog.swift`, `Dialogs/PreservedBranchesDialog.swift`, `Dialogs/RepositorySettingsSheet.swift`, new `Workspaces/WorktreeLifecycleModel.swift`; edits to `Sidebar/WorkspaceCardView.swift`, `Sidebar/WorkspaceContextMenu.swift`, `Sidebar/WorkspaceStatusSlot.swift`, `ShellController.swift`, `ShellView.swift`; new pure logic `Sources/SmthzCore/WorkspaceComposerLogic.swift` and tests `WorktreeAppLogicTests.swift` (10 unit + 4 host-contract tests that run the composer/delete params through the real `worktree.*`/`repo.searchRefs` RPC on temp repos).
+
+| Entry point | Behaviour | Status |
+|---|---|---|
+| Composer Project combobox | Git projects of the catalog, search, "Add a new project" pinned first | Real |
+| Composer Name | Placeholder shows `worktree.suggestName`; empty name sends it with `nameWasGenerated`; trailing `:partial` shows up to 6 emojibase suggestions, click inserts `:code: ` | Real |
+| Create From Name / Branch | Name: optional start-from ref (`repo.searchRefs`; tags → `commit`, else `base`). Branch: pick a local branch (checked out as-is when free, `startFrom.kind=branch` + `branchName`) or a remote branch (`remote-branch`, local name = leaf) | Real |
+| Create From Smart / GitHub / GitLab / Linear / Jira | Tabs shown, Create disabled with "Not available yet" | VISUAL-ONLY until M9 |
+| Composer Advanced | Branch name, Note (`comment`), Start from, Parent worktree (same project), Setup (repository default / run / skip), Sparse checkout directories (validated: no absolute, `..`, `.git`) and presets | Real; **sparse presets are stored in app UserDefaults per repo**, because the host has no `sparsePreset.*` methods yet (`presetId` is sent but unused by the host) |
+| Composer Create / Create more | `worktree.create`; validation errors shown inline; the composer closes when the job starts (stays open, fields reset, new suggested name with Create more) | Real |
+| Composer Run on / Agent | Unchanged | VISUAL-ONLY (M7 / M5) |
+| Setup approval dialog | `setupDecisionRequired` → Run / Skip resubmits with `setup`; `untrustedCommand` → preview of the shared command from the primary checkout's `smthz.yaml`/`orca.yaml`, SHA-256 shown, Trust → `worktree.approveHooks` then resubmit; Skip setup | Real (host contract tested); dialog not seen on screen |
+| Sidebar card progress | Phase label (§8.3), percent (phase index + Git `Updating files` counter in `add`), Cancel → `job.cancel` via `waitForJob`; status slot spinner | Real; Cancel not exercised against a real slow checkout |
+| Card failure row | "Create failed" + Retry (clears the failed row with `worktree.remove` force/no hooks/**branch kept**, re-issues the original params with a new request id) and Delete; rows failed by `hostRestarted` (no params in memory) retry with name + repo only | Real |
+| Main area while creating/failed | Pending panel (phase, progress, Cancel / Retry, Delete) instead of the terminal | Real |
+| Job success | Worktree becomes the active workspace (`worktree:<id>` layout, own tabs, Explorer root), a shell opens in the new path, one tab per `defaultTabs` (command typed after the shell starts), setup session adopted by cwd and titled "Setup" | Real code path; **not driven in the GUI**. Known race: if the host monitor sees the setup session before the layout exists it is adopted into the Default workspace |
+| `smthz worktree create --activate` | App sees `revealRequested`, clears it (`worktree.set`) and selects the workspace | Real; not exercised |
+| Inline rename / Pin / Mark Read-Unread (worktree cards) | `worktree.set` displayName / pinned / unread; folder cards use `folderWorkspace.update` | Real |
+| Edit Workspace Details (card menu, Set/Change Parent) | Name, note, parent (`worktree.show` lineage, `parentId`/`noParent`; cycle → inline error) | Real |
+| Delete Workspace dialog | Dirty warning (`worktree.show` clean), running-terminal count, "Also delete the branch", "Run the archive script", Don't ask again; `worktreeDirty` → Force Delete, `archiveHookFailed` → Delete Anyway (`allowFailedArchiveHook`); layout of the deleted worktree is dropped | Real (host contract tested for dirty/preserve/keep branch). Multi-select delete: dialog takes N targets but the sidebar has no multi-selection yet |
+| Review N Branches | Opens after a delete returns `preservedBranch` and from the card menu; checkbox list, Delete → `worktree.deletePreservedBranch` (`git branch -D`), Keep All | Real |
+| Repository Settings (card menu) | `repo.show`/`repo.update`: name, badge colour, base ref (invalid → inline error), setup run policy, command source, local setup/archive scripts, shared paths, external worktree visibility | Real |
+| Not done in this WP | Children chip/collapse in the sidebar (needs lineage on `worktree.list`), Jump palette "Create worktree" row, Open Parent Worktree, card multi-select, `wait-for-setup` agent policy (M5) | Stub |
+
+Verification: build OK; full suite **492 tests ×3 pass** (434 baseline + 14 of this WP + other workers' Agents tests). An earlier version of the host-contract fixture polled jobs with `Thread.sleep` and starved timing-sensitive suites (`WebSocketTransportTests`, `HostRouterTests` deadline, `PTYSessionTests` descriptor count) in 3 of 3 runs; it now polls with `Task.sleep`. **No GUI check was done**: the desktop was locked (`CGSSessionScreenIsLocked = true`) for the whole session, so composer/progress/dialog rendering, terminal-in-new-path (`pwd`), setup tab output, Review Branches after a real delete and tab persistence per worktree across app restart remain to be verified in the real app.
+

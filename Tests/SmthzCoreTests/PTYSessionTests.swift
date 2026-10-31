@@ -158,28 +158,45 @@ struct PTYSessionTests {
     }
 
     @Test func twentySessionsDoNotLeakDescriptors() throws {
-        func descriptorCount() -> Int {
-            // Enumerate actual live descriptors, excluding a directory-listing
-            // fd that FileManager may temporarily open for /dev/fd itself.
+        // Count only descriptors of this process that refer to the given pty
+        // (master or slave side), so parallel suites' sockets, pipes and files
+        // cannot affect the result. The pty is identified by its slave device,
+        // read from the child's controlling terminal.
+        func ptyDescriptors(slaveDevice: dev_t) -> Set<Int32> {
             let entries = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []
-            return entries.compactMap { Int32($0) }.filter { fcntl($0, F_GETFD) != -1 }.count
+            var result = Set<Int32>()
+            for fd in entries.compactMap({ Int32($0) }) {
+                var info = stat()
+                guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFCHR else { continue }
+                if info.st_rdev == slaveDevice { result.insert(fd); continue }
+                var name = [CChar](repeating: 0, count: 128)
+                var slave = stat()
+                if ptsname_r(fd, &name, name.count) == 0, stat(name, &slave) == 0,
+                   slave.st_rdev == slaveDevice { result.insert(fd) }
+            }
+            return result
         }
-        // This suite is serialized and this last test follows the other process
-        // tests; waiting for a stable count also allows unrelated suite teardown.
-        var baseline = descriptorCount()
-        var stableSince = Date()
-        #expect(eventually(timeout: 5) {
-            let count = descriptorCount()
-            if count != baseline { baseline = count; stableSince = Date() }
-            return Date().timeIntervalSince(stableSince) >= 0.1
-        })
+        func controllingTerminal(_ pid: Int32) -> dev_t? {
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+                  info.e_tdev != UInt32.max else { return nil }
+            return dev_t(bitPattern: info.e_tdev)
+        }
         for _ in 0..<20 {
-            let child = try session("/bin/echo", ["fd-check"])
+            // The child blocks on stdin so its controlling terminal can be read.
+            let child = try session("/bin/sh", ["-c", "read line"])
+            let device = try #require(controllingTerminal(child.pid))
+            // The parent holds exactly one descriptor for the pty (its master);
+            // the slave must already be closed after spawn.
+            let held = ptyDescriptors(slaveDevice: device)
+            #expect(held.count == 1)
+            try child.write(Data("\n".utf8))
             #expect(child.waitForExit(timeout: 3) == .exited(0))
             child.close()
+            // A leak keeps the same descriptor open on the same pty forever; a
+            // parallel test reusing both the number and the pty is transient.
+            #expect(eventually(timeout: 5) { ptyDescriptors(slaveDevice: device).isDisjoint(with: held) })
         }
-        // Other suites run in parallel and own transient descriptors; a real
-        // leak is permanent, so require the count to settle to at most the baseline.
-        #expect(eventually(timeout: 5) { descriptorCount() - baseline <= 0 })
     }
 }

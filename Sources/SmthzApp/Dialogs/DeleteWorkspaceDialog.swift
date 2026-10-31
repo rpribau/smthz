@@ -1,32 +1,44 @@
 import SwiftUI
 
-// VISUAL-ONLY: stub data until M4 projects/worktrees and workspace deletion backend.
-// This dialog renders only in DEBUG. UI-29 may present it for the existing Default
-// workspace; onConfirm is a preview callback, never a filesystem delete operation.
+/// Delete Workspace confirmation (WP-M4-WORKTREE-APP). The caller runs `worktree.remove` with the
+/// chosen options: delete the branch (unmerged branches are preserved by the host and offered in
+/// Review Branches), run the archive script, and close the terminals running inside the worktree.
+/// A dirty checkout or a failed archive script comes back as `failureMessage` with a force action.
 struct SmthzDeleteWorkspaceDialog: View {
     struct Target: Identifiable {
         let id: String
         let name: String
         var path: String? = nil
         var hasUncommittedChanges = false
+        var sessionCount = 0
+    }
+    struct Choice {
+        var deleteBranch = true
+        var runHooks = true
     }
 
     static let preferenceKey = "confirmations.skipDeleteWorkspace"
     let targets: [Target]
     var lineageNotice: String? = nil
     var failureMessage: String? = nil
+    var forceTitle = "Force Delete"
+    var working = false
     let onCancel: () -> Void
-    var onConfirm: (_ dontAskAgain: Bool) -> Void = { _ in }
-    var onForceDelete: (() -> Void)? = nil
+    var onConfirm: (_ dontAskAgain: Bool, _ choice: Choice) -> Void = { _, _ in }
+    var onForceDelete: ((Choice) -> Void)? = nil
     @State private var dontAskAgain = false
+    @State private var deleteBranch = true
+    @State private var runHooks = true
     @AppStorage("confirmations.skipDeleteWorkspace") private var skipConfirmation = false
 
+    private var choice: Choice { Choice(deleteBranch: deleteBranch, runHooks: runHooks) }
+    private var sessions: Int { targets.reduce(0) { $0 + $1.sessionCount } }
+
     var body: some View {
-        #if DEBUG
         SmthzDialog(title: targets.count > 1 ? "Delete Workspaces" : "Delete Workspace",
                     description: targets.count > 1
-                        ? "Remove the selected workspaces?"
-                        : "Remove this workspace?",
+                        ? "Remove the selected worktrees from disk?"
+                        : "Remove this worktree from disk?",
                     onDismiss: onCancel) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -52,14 +64,19 @@ struct SmthzDeleteWorkspaceDialog: View {
             .fixedSize(horizontal: false, vertical: true)
             .background(SmthzTheme.muted, in: RoundedRectangle(cornerRadius: 8))
             if targets.contains(where: \.hasUncommittedChanges) {
-                Label {
-                    Text("Any uncommitted or untracked changes in Git workspaces will be permanently deleted.")
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    SmthzIcon.image("triangle-alert").resizable().scaledToFit().frame(width: 14, height: 14)
-                }
-                .font(SmthzFont.ui(size: 12)).foregroundStyle(SmthzTheme.statusWarning)
+                warning("Any uncommitted or untracked changes in Git workspaces will be permanently deleted.")
             }
+            if sessions > 0 {
+                warning(sessions == 1 ? "1 terminal running inside this workspace will be closed."
+                        : "\(sessions) terminals running inside these workspaces will be closed.")
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Also delete the branch", isOn: $deleteBranch).toggleStyle(SmthzCheckboxStyle())
+                Text("Branches with unmerged commits are kept and listed for review.")
+                    .font(SmthzFont.ui(size: 11)).foregroundStyle(SmthzTheme.mutedForeground)
+                Toggle("Run the archive script", isOn: $runHooks).toggleStyle(SmthzCheckboxStyle())
+            }
+            .font(SmthzFont.ui(size: 12))
             if let lineageNotice {
                 Text(lineageNotice).font(SmthzFont.ui(size: 12))
                     .foregroundStyle(SmthzTheme.mutedForeground)
@@ -80,32 +97,40 @@ struct SmthzDeleteWorkspaceDialog: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         } footer: {
+            if working { ProgressView().controlSize(.small) }
             Button("Cancel", action: onCancel)
                 .buttonStyle(SmthzButtonStyle(.outline, size: .small))
                 .keyboardShortcut(.cancelAction)
             if failureMessage != nil, let onForceDelete {
-                Button("Force Delete", role: .destructive, action: onForceDelete)
+                Button(forceTitle, role: .destructive) { onForceDelete(choice) }
                     .buttonStyle(SmthzDestructiveDialogButtonStyle())
+                    .disabled(working)
             } else {
                 Button("Delete", role: .destructive) {
                     if dontAskAgain { skipConfirmation = true }
-                    onConfirm(dontAskAgain)
+                    onConfirm(dontAskAgain, choice)
                 }
                 .buttonStyle(SmthzDestructiveDialogButtonStyle())
-                .disabled(targets.isEmpty)
+                .disabled(targets.isEmpty || working)
             }
         }
-        #else
-        EmptyView()
-        #endif
+    }
+
+    private func warning(_ text: String) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            SmthzIcon.image("triangle-alert").resizable().scaledToFit().frame(width: 14, height: 14)
+        }
+        .font(SmthzFont.ui(size: 12)).foregroundStyle(SmthzTheme.statusWarning)
     }
 }
 
 #if DEBUG
-#Preview("Delete workspace · visual only") {
+#Preview("Delete workspace") {
     SmthzDeleteWorkspaceDialog(
-        targets: [.init(id: "default", name: "Default workspace", path: "/projects/smthz", hasUncommittedChanges: true)],
+        targets: [.init(id: "w", name: "fix-login", path: "~/smthz/workspaces/app/fix-login", hasUncommittedChanges: true, sessionCount: 2)],
         lineageNotice: "This workspace has 2 descendant workspaces.", onCancel: {})
-        .padding(40).frame(width: 680, height: 560).background(SmthzTheme.background)
+        .padding(40).frame(width: 680, height: 620).background(SmthzTheme.background)
 }
 #endif

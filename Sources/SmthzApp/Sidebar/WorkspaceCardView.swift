@@ -1,7 +1,8 @@
 import SwiftUI
 import SmthzCore
 
-// VISUAL-ONLY: stub data until the M4 workspace model; production currently has only Default workspace.
+// Real for project workspaces since WP-M4-WORKTREE-APP (creation progress, failure/Retry, rename);
+// agent statuses and badges remain VISUAL-ONLY until M5.
 struct WorkspaceCardData: Identifiable, Equatable {
     enum Status: CaseIterable, Equatable { case idle, live, working, monitoring, question, error, interrupted, branch, review }
     let id: String
@@ -30,6 +31,16 @@ struct WorkspaceCardData: Identifiable, Equatable {
     var isFolder = true
     var deletionFailure: String?
     var isQueuedForDeletion = false
+    /// Worktree create job in progress (phase label, 0...1, Cancel requested).
+    var creation: Creation?
+    /// Failed create (host error text); the card offers Retry and Delete.
+    var creationFailure: String?
+
+    struct Creation: Equatable {
+        var phase: String
+        var fraction: Double
+        var cancelling = false
+    }
 
     struct Badge: Equatable, Identifiable {
         var id: String { label + icon }
@@ -76,6 +87,8 @@ struct WorkspaceCardView: View {
                 if hasMeta { metaRow }
                 if let failure = data.deletionFailure { warning("Delete failed", detail: failure) }
                 if data.isQueuedForDeletion { warning("Queued for deletion", detail: "Queued for deletion") }
+                if let creation = data.creation { creationRow(creation) }
+                if let failure = data.creationFailure { failureRow(failure) }
             }
         }
         .padding(.leading, 8).padding(.trailing, 6)
@@ -212,6 +225,38 @@ struct WorkspaceCardView: View {
         Text(label).font(SmthzFont.ui(size: 10, weight: .semibold)).lineLimit(1)
             .padding(.horizontal, 4).frame(height: 16)
             .background(SmthzTheme.accent, in: RoundedRectangle(cornerRadius: 4))
+    }
+    private func creationRow(_ creation: WorkspaceCardData.Creation) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(creation.cancelling ? "Cancelling…" : creation.phase).lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(Int(creation.fraction * 100))%").monospacedDigit()
+                if let cancel = actions.cancelCreate {
+                    Button("Cancel", action: cancel).buttonStyle(SmthzButtonStyle(.ghost, size: .xs))
+                        .disabled(creation.cancelling).accessibilityLabel("Cancel workspace creation")
+                }
+            }
+            ProgressView(value: creation.fraction).progressViewStyle(.linear).controlSize(.mini)
+                .tint(SmthzTheme.agentWorking).accessibilityLabel("Creating workspace")
+        }
+        .font(SmthzFont.ui(size: 11)).foregroundStyle(SmthzTheme.mutedForeground)
+        .padding(.top, 2)
+    }
+    private func failureRow(_ failure: String) -> some View {
+        HStack(spacing: 4) {
+            SmthzIcon.image("triangle-alert").frame(width: 11, height: 11)
+            Text("Create failed").lineLimit(1).help(failure)
+            Spacer(minLength: 0)
+            if let retry = actions.retryCreate {
+                Button("Retry", action: retry).buttonStyle(SmthzButtonStyle(.ghost, size: .xs))
+            }
+            if let delete = actions.delete {
+                Button("Delete", action: delete).buttonStyle(SmthzButtonStyle(.ghost, size: .xs))
+            }
+        }
+        .font(SmthzFont.ui(size: 11)).foregroundStyle(SmthzTheme.destructive)
+        .accessibilityElement(children: .contain).accessibilityLabel("Create failed: \(failure)")
     }
     private func warning(_ title: String, detail: String) -> some View {
         HStack(spacing: 4) { SmthzIcon.image("triangle-alert").frame(width: 11, height: 11); Text(title) }

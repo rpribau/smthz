@@ -1,6 +1,6 @@
 import SwiftUI
 
-// VISUAL-ONLY: stub data until the M4 workspace model supplies agent/workspace status.
+// Creation/failed/live states are real (WP-M4-WORKTREE-APP); agent statuses stay VISUAL-ONLY until M5.
 struct SmthzWorkspaceStatusSlot: View {
     let data: WorkspaceCardData
     var markRead: (() -> Void)?
@@ -48,6 +48,8 @@ struct SmthzWorkspaceStatusSlot: View {
     }
     private var label: String {
         if data.isDeleting { return "Deleting…" }
+        if let creation = data.creation { return "Creating workspace: \(creation.phase)" }
+        if data.creationFailure != nil { return "Workspace creation failed" }
         if data.isUnread { return "Unread activity" }
         if data.isSleeping { return "Sleeping" }
         switch data.status {

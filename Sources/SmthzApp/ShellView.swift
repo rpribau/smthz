@@ -34,7 +34,17 @@ struct ShellView: View {
     @State private var quickCommandsOpen = false
     @State private var renameID: String?
     @State private var renameDraft = ""
-    private enum Surface { case jump, files, newWorkspace, addProject, deleteWorkspace, onboarding }
+    @State private var lifecycle = WorktreeLifecycleModel()
+    @State private var composerProjectID: String?
+    @State private var deleteFailure: (message: String, force: String, options: WorkspaceComposerLogic.RemoveOptions)?
+    @State private var deleteWorking = false
+    @State private var deleteTargets: [SmthzDeleteWorkspaceDialog.Target] = []
+    /// A create blocked on a setup decision or untrusted shared command (Setup approval dialog).
+    private struct SetupPending { let block: WorkspaceComposerLogic.CreateBlock; let params: [String: HostJSON]; let title: String }
+    private enum Surface {
+        case jump, files, newWorkspace, addProject, deleteWorkspace, onboarding
+        case deleteWorktree(String), editWorkspace(String), setupApproval(SetupPending), preservedBranches(String), repositorySettings(String)
+    }
     private var model: ShellController { appModel.workspace }
 
     var body: some View {
@@ -63,9 +73,7 @@ struct ShellView: View {
         .focusedSceneValue(\.smthzShellActions, SmthzShellActions(canPerform: canPerform, perform: perform))
         .environment(\.smthzProjectActions, projectActions)
         .environment(\.smthzWorkspaceDirectories, workspaceDirectories)
-        .environment(\.smthzWorkspaceActions, ["default": SmthzWorkspaceActions(
-            rename: { model.workspaceTitle = $0 }, setPinned: { model.workspacePinned = $0 },
-            setUnread: { model.workspaceUnread = $0 }, delete: { overlay = .deleteWorkspace })])
+        .environment(\.smthzWorkspaceActions, workspaceActions)
         .background(SmthzRegistryShortcutMonitor(actions: SmthzShellActions(canPerform: canPerform, perform: perform), enabled: overlay == nil && renameID == nil))
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in SmthzKeybindings.shared.updateFocus() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in SmthzKeybindings.shared.reload() }
@@ -77,6 +85,21 @@ struct ShellView: View {
         .allowsWindowActivationEvents()
         .task(id: monitorGeneration) { await model.observeHost() }
         .task(id: monitorGeneration) { await catalog.observe() }
+        .task(id: monitorGeneration) {
+            lifecycle.onCreated = worktreeCreated
+            lifecycle.onWarning = { title, detail in toast = SmthzToastMessage(title: title, description: detail, kind: .warning) }
+            await lifecycle.observe()
+        }
+        .onChange(of: lifecycle.rows) { _, rows in
+            // `smthz worktree create --activate` asks the app to reveal the new workspace once.
+            for row in rows.values where row.revealRequested && row.state == "ready" {
+                Task {
+                    try? await lifecycle.set(row.id, ["revealRequested": .bool(false)])
+                    await catalog.refresh()
+                    selectWorkspace("worktree:" + row.id)
+                }
+            }
+        }
         .onChange(of: model.actionError) { _, message in
             if let message { toast = SmthzToastMessage(title: "Terminal action failed", description: message, kind: .error); model.actionError = nil }
         }
@@ -109,7 +132,7 @@ struct ShellView: View {
                 canCreateWorkspace: model.hostIsRunning && !model.creatingShell,
                 onSelectDestination: { appModel.destination = $0 }, onSearch: showJump,
                 onSelectWorkspace: selectWorkspace,
-                onNewWorkspace: { overlay = .newWorkspace }, onAddProject: { overlay = .addProject },
+                onNewWorkspace: { openComposer() }, onAddProject: { overlay = .addProject },
                 onOpenSettings: { openSettings("appearance") },
                 onScrollToCurrent: { appModel.destination = .workspaces },
                 onOpenTaskProvider: { _ in appModel.destination = .tasks },
@@ -139,12 +162,179 @@ struct ShellView: View {
     }
     private func card(for workspace: WorkspaceCatalogModel.Workspace) -> WorkspaceCardData {
         let count = model.sessionCount(workspace.key)
-        return WorkspaceCardData(id: workspace.id, title: workspace.title,
+        let row = lifecycle.row(workspace.key), job = lifecycle.job(workspace.key)
+        var data = WorkspaceCardData(id: workspace.id, title: workspace.title, branch: row?.branch,
             detail: count == 1 ? "1 session" : "\(count) sessions", status: count > 0 ? .live : .idle,
             isActive: appModel.destination == .workspaces && model.activeKey == workspace.key,
             isUnread: workspace.isUnread, isPinned: workspace.isPinned, isSleeping: !model.hostIsRunning,
             directory: URL(fileURLWithPath: workspace.path, isDirectory: true),
-            isPrimary: workspace.isMain, isFolder: workspace.isFolder)
+            isPrimary: workspace.isMain, isSparse: row?.isSparse == true,
+            notes: row?.comment.isEmpty == false ? row?.comment : nil, isFolder: workspace.isFolder)
+        if let row, lifecycle.removing.contains(row.id) { data.isDeleting = true }
+        if let job, job.failure == nil {
+            data.creation = .init(phase: WorkspaceComposerLogic.phaseLabel(job.phase), fraction: job.fraction, cancelling: job.cancelling)
+            data.status = .working
+        } else if let failure = job?.failure {
+            data.creationFailure = failure; data.status = .error
+        } else if let row {
+            switch row.state {
+            case "creating": data.creation = .init(phase: "Creating", fraction: 0); data.status = .working
+            case "failed": data.creationFailure = WorkspaceComposerLogic.message(code: row.lastError ?? "gitFailed", detail: nil); data.status = .error
+            case "removing": data.isDeleting = true
+            case "remove_failed": data.deletionFailure = WorkspaceComposerLogic.message(code: row.lastError ?? "gitFailed", detail: nil)
+            default: break
+            }
+        }
+        return data
+    }
+    /// Per-card commands: the Default workspace keeps its local flags; project workspaces go to the host.
+    private var workspaceActions: [String: SmthzWorkspaceActions] {
+        var result = ["default": SmthzWorkspaceActions(
+            rename: { model.workspaceTitle = $0 }, setPinned: { model.workspacePinned = $0 },
+            setUnread: { model.workspaceUnread = $0 }, delete: { overlay = .deleteWorkspace })]
+        for group in catalog.groups {
+            for folder in group.folders {
+                let id = String(folder.key.rawValue.dropFirst(7))
+                result[folder.id] = SmthzWorkspaceActions(setPinned: { pinned in Task { await catalog.setFolderFlags(id, pinned: pinned) } },
+                    setUnread: { unread in Task { await catalog.setFolderFlags(id, unread: unread) } })
+            }
+        }
+        for project in catalog.projects {
+            for workspace in project.workspaces where !workspace.isFolder {
+                let id = String(workspace.key.rawValue.dropFirst(9))
+                let job = lifecycle.jobs[id], row = lifecycle.rows[id]
+                let failed = job?.failure != nil || row?.state == "failed"
+                let creating = (job != nil && job?.failure == nil) || row?.state == "creating"
+                var actions = SmthzWorkspaceActions(
+                    rename: { name in setWorktree(id, ["displayName": .string(name)]) },
+                    setPinned: { pinned in setWorktree(id, ["pinned": .bool(pinned)]) },
+                    setUnread: { unread in setWorktree(id, ["unread": .bool(unread)]) },
+                    delete: workspace.isMain ? nil : { failed ? discardFailed(id) : openDelete(workspace) },
+                    edit: creating ? nil : { overlay = .editWorkspace(id) },
+                    repositorySettings: { overlay = .repositorySettings(project.id) },
+                    removeParent: { setWorktree(id, ["noParent": .bool(true)]) },
+                    reviewBranches: { overlay = .preservedBranches(project.id) })
+                if job != nil && job?.failure == nil { actions.cancelCreate = { lifecycle.cancel(id) } }
+                if failed { actions.retryCreate = { retryCreate(id) } }
+                result[workspace.id] = actions
+            }
+        }
+        return result
+    }
+    private func setWorktree(_ id: String, _ fields: [String: HostJSON]) {
+        Task {
+            do { try await lifecycle.set(id, fields); await catalog.refresh() }
+            catch { toast = SmthzToastMessage(title: "Could not update workspace", description: error.localizedDescription, kind: .error) }
+        }
+    }
+    private var composerProjects: [SmthzComposerProject] {
+        catalog.projects.filter { $0.kind == "git" }.map { project in
+            SmthzComposerProject(id: project.id, title: project.title, path: project.path,
+                parents: project.workspaces.filter { lifecycle.row($0.key)?.state ?? "ready" == "ready" }
+                    .map { .init(id: String($0.key.rawValue.dropFirst(9)), title: $0.title) })
+        }
+    }
+    private func openComposer(project: String? = nil) {
+        composerProjectID = project ?? catalog.project(containing: model.activeKey)?.id
+        overlay = .newWorkspace
+    }
+    /// Composer submit: a job start closes it; a setup block hands off to the approval dialog.
+    private func submitCreate(_ params: [String: HostJSON], _ title: String) async -> SmthzNewWorkspaceComposer.SubmitResult {
+        switch await lifecycle.create(params, title: title) {
+        case .started(let id):
+            await catalog.refresh()
+            appModel.destination = .workspaces
+            if let workspace = catalog.workspace(WorkspaceKey(rawValue: "worktree:" + id)) {
+                model.activateWorkspace(workspace.key, displayName: title, rootPath: workspace.path)
+            }
+            return .started
+        case .blocked(let block, let params):
+            overlay = .setupApproval(SetupPending(block: block, params: params, title: title))
+            return .handedOff
+        case .failed(let message): return .failed(message)
+        }
+    }
+    private func resumeCreate(_ pending: SetupPending, _ choice: WorkspaceComposerLogic.SetupChoice) {
+        dismiss()
+        Task {
+            let params = choice == .skip || pending.block == .setupDecision ? WorkspaceComposerLogic.withSetup(pending.params, choice) : pending.params
+            switch await submitCreate(params, pending.title) {
+            case .failed(let message): toast = SmthzToastMessage(title: "Could not create workspace", description: message, kind: .error)
+            default: break
+            }
+        }
+    }
+    private func retryCreate(_ id: String) {
+        Task {
+            switch await lifecycle.retry(id) {
+            case .started: await catalog.refresh()
+            case .blocked(let block, let params):
+                overlay = .setupApproval(SetupPending(block: block, params: params, title: lifecycle.rows[id]?.displayName ?? "Workspace"))
+            case .failed(let message): toast = SmthzToastMessage(title: "Retry failed", description: message, kind: .error)
+            }
+        }
+    }
+    private func discardFailed(_ id: String) {
+        Task {
+            await lifecycle.discardFailed(id)
+            model.forgetWorkspace(WorkspaceKey(rawValue: "worktree:" + id))
+            await catalog.refresh()
+        }
+    }
+    /// The job finished: the worktree becomes the active workspace and its terminal opens in the new path.
+    private func worktreeCreated(_ result: WorktreeLifecycleModel.CreateResult) {
+        Task {
+            await catalog.refresh()
+            let key = WorkspaceKey(rawValue: "worktree:" + result.worktreeID)
+            // Only steal focus when the user is still looking at this workspace (or nothing else).
+            guard model.activeKey == key || model.workspace.tabs.isEmpty else {
+                toast = SmthzToastMessage(title: "Workspace ready", description: result.title, kind: .success); return
+            }
+            appModel.destination = .workspaces
+            await model.openWorktree(key, title: result.title, path: result.path,
+                                     defaultTabs: result.defaultTabs, setupSessionID: result.setupSessionID)
+        }
+    }
+    private func openDelete(_ workspace: WorkspaceCatalogModel.Workspace) {
+        let id = String(workspace.key.rawValue.dropFirst(9))
+        deleteTargets = [.init(id: id, name: workspace.title, path: workspace.path, sessionCount: hostSessions(inside: workspace.path))]
+        deleteFailure = nil
+        if UserDefaults.standard.bool(forKey: SmthzDeleteWorkspaceDialog.preferenceKey) {
+            runDelete(id, options: .init()); return
+        }
+        overlay = .deleteWorktree(id)
+        Task {
+            if let clean = await lifecycle.details(id).clean, !clean, deleteTargets.first?.id == id {
+                deleteTargets[0].hasUncommittedChanges = true
+            }
+        }
+    }
+    private func hostSessions(inside path: String) -> Int {
+        model.sessions.filter { $0.running && $0.cwd.map { WorkspaceSelectors.contains(root: path, path: $0) } == true }.count
+    }
+    private func runDelete(_ id: String, options: WorkspaceComposerLogic.RemoveOptions) {
+        deleteWorking = true
+        let repoID = lifecycle.rows[id]?.repoID
+        Task {
+            defer { deleteWorking = false }
+            do {
+                let preserved = try await lifecycle.remove(id, options: options)
+                model.forgetWorkspace(WorkspaceKey(rawValue: "worktree:" + id))
+                await catalog.refresh()
+                if preserved != nil, let repoID { overlay = .preservedBranches(repoID) }
+                else if case .deleteWorktree = overlay { dismiss() }
+            } catch let failure as WorktreeLifecycleModel.Failure {
+                var next = options
+                switch failure.code {
+                case "worktreeDirty": next.force = true; deleteFailure = (failure.localizedDescription, "Force Delete", next)
+                case "archiveHookFailed": next.allowFailedArchiveHook = true; deleteFailure = (failure.localizedDescription + " Delete anyway?", "Delete Anyway", next)
+                default: deleteFailure = (failure.localizedDescription, "Force Delete", { var o = options; o.force = true; return o }())
+                }
+                if case .deleteWorktree = overlay {} else { overlay = .deleteWorktree(id) }
+            } catch {
+                deleteFailure = (error.localizedDescription, "Force Delete", options)
+            }
+        }
     }
     private var workspaceDirectories: [String: URL] {
         var result = Dictionary(catalog.allWorkspaces.map { ($0.id, URL(fileURLWithPath: $0.path, isDirectory: true)) },
@@ -155,11 +345,11 @@ struct ShellView: View {
     /// Keyed by project title (the header's lookup key).
     private var projectActions: [String: SmthzProjectActions] {
         var result: [String: SmthzProjectActions] = ["Local host": SmthzProjectActions(createWorkspace: {
-            selectWorkspace("default"); overlay = .newWorkspace })]
+            selectWorkspace("default"); openComposer() })]
         for project in catalog.projects {
             result[project.title] = SmthzProjectActions(
                 remove: { removeProject(project) },
-                createWorkspace: project.workspaces.first.map { main in { selectWorkspace(main.id); overlay = .newWorkspace } })
+                createWorkspace: { openComposer(project: project.kind == "git" ? project.id : nil) })
         }
         return result
     }
@@ -172,7 +362,8 @@ struct ShellView: View {
         }
         guard let workspace = catalog.workspace(WorkspaceKey(rawValue: id)) else { return }
         model.activateWorkspace(workspace.key, displayName: workspace.title, rootPath: workspace.path)
-        if model.workspace.tabs.isEmpty, model.hostIsRunning { Task { await model.newShell() } }
+        let pending = lifecycle.job(workspace.key) != nil || ["creating", "failed"].contains(lifecycle.row(workspace.key)?.state ?? "ready")
+        if !pending, model.workspace.tabs.isEmpty, model.hostIsRunning { Task { await model.newShell() } }
     }
     private func removeProject(_ project: WorkspaceCatalogModel.Project) {
         Task {
@@ -229,12 +420,14 @@ struct ShellView: View {
                 LandingView(variant: .hostNotRunning, bindings: SmthzKeybindings.shared.registry,
                     onStartHost: { HostController.shared.start(); monitorGeneration += 1 },
                     onRetry: { HostController.shared.start(); monitorGeneration += 1 })
+            } else if model.activeTab == nil, let pending = pendingCreation {
+                pending
             } else if model.activeTab != nil {
                 LayoutSplitView(model: model, close: closePane)
                     .accessibilityLabel("Terminal panes")
             } else {
                 LandingView(hasProjects: !catalog.projects.isEmpty, bindings: SmthzKeybindings.shared.registry, onAddProject: { overlay = .addProject },
-                            onCreateWorkspace: { overlay = .newWorkspace })
+                            onCreateWorkspace: { openComposer() })
             }
         }
     }
@@ -244,17 +437,77 @@ struct ShellView: View {
             case .jump: SmthzJumpPalette(model: palette, onAction: paletteAction, onDismiss: dismiss)
             case .files: SmthzGoToFilePalette(root: model.rootURL, onOpen: { InterimFileOpener.open($0) }, onDismiss: dismiss)
             case .newWorkspace:
-                modal { SmthzNewWorkspaceComposer(onDismiss: dismiss, onAddProject: { self.overlay = .addProject },
-                    onCreateShell: newShell, onAgentSettings: { dismiss(); openSettings("agents") }) }
+                modal { SmthzNewWorkspaceComposer(projects: composerProjects, initialProjectID: composerProjectID, lifecycle: lifecycle,
+                    onDismiss: dismiss, onAddProject: { self.overlay = .addProject },
+                    onCreateShell: newShell, onAgentSettings: { dismiss(); openSettings("agents") }, onSubmit: submitCreate) }
             case .addProject:
                 modal { SmthzAddProjectDialog(catalog: catalog, onDismiss: dismiss, onAdded: { key in
                     if let key { selectWorkspace(key.rawValue) } }) }
             case .deleteWorkspace:
                 modal { SmthzDeleteWorkspaceDialog(targets: [.init(id: "default", name: model.workspaceTitle, path: model.rootURL?.path)],
-                    onCancel: dismiss, onConfirm: { _ in dismiss(); unavailable("Workspace deletion") }) }
+                    onCancel: dismiss, onConfirm: { _, _ in dismiss(); unavailable("Deleting the Default workspace") }) }
+            case .deleteWorktree(let id):
+                modal { SmthzDeleteWorkspaceDialog(targets: deleteTargets, failureMessage: deleteFailure?.message,
+                    forceTitle: deleteFailure?.force ?? "Force Delete", working: deleteWorking, onCancel: dismiss,
+                    onConfirm: { _, choice in runDelete(id, options: removeOptions(choice)) },
+                    onForceDelete: { choice in
+                        var options = deleteFailure?.options ?? removeOptions(choice)
+                        options.deleteBranch = choice.deleteBranch; options.runHooks = choice.runHooks || options.allowFailedArchiveHook
+                        runDelete(id, options: options)
+                    }) }
+            case .editWorkspace(let id):
+                modal { SmthzEditWorkspaceDialog(worktreeID: id, initialName: lifecycle.rows[id]?.displayName ?? "",
+                    initialNote: lifecycle.rows[id]?.comment ?? "",
+                    parents: composerProjects.first { $0.id == lifecycle.rows[id]?.repoID }?.parents ?? [],
+                    lifecycle: lifecycle, onDismiss: dismiss, onSaved: { Task { await catalog.refresh() } }) }
+            case .setupApproval(let pending):
+                let repoID = pending.params["repoId"]?.string
+                let project = catalog.projects.first { $0.id == repoID }
+                modal { SmthzSetupApprovalDialog(block: pending.block, projectTitle: project?.title ?? "This project",
+                    repoPath: project?.path, onCancel: dismiss, onDecision: { resumeCreate(pending, $0) },
+                    onTrust: { kind, hash in try await lifecycle.approveHooks(repoID: repoID ?? "", kind: kind, hash: hash) }) }
+            case .preservedBranches(let repoID):
+                modal { SmthzPreservedBranchesDialog(repoID: repoID, projectTitle: catalog.projects.first { $0.id == repoID }?.title ?? "this project",
+                    lifecycle: lifecycle, onDismiss: dismiss) }
+            case .repositorySettings(let repoID):
+                modal { SmthzRepositorySettingsSheet(repoID: repoID, lifecycle: lifecycle, onDismiss: dismiss,
+                    onSaved: { Task { await catalog.refresh() } }) }
             case .onboarding: SmthzOnboardingView(onFinish: dismiss, onAddProject: { self.overlay = .addProject })
             }
         }
+    }
+    private func removeOptions(_ choice: SmthzDeleteWorkspaceDialog.Choice) -> WorkspaceComposerLogic.RemoveOptions {
+        var options = WorkspaceComposerLogic.RemoveOptions()
+        options.deleteBranch = choice.deleteBranch; options.runHooks = choice.runHooks
+        return options
+    }
+    /// Shown in place of the terminal while the active worktree is being created or failed to create.
+    private var pendingCreation: AnyView? {
+        let key = model.activeKey
+        guard let id = key.rawValue.hasPrefix("worktree:") ? String(key.rawValue.dropFirst(9)) : nil else { return nil }
+        let job = lifecycle.jobs[id], row = lifecycle.rows[id]
+        guard job != nil || row?.state == "creating" || row?.state == "failed" else { return nil }
+        let failure = job?.failure ?? (row?.state == "failed" ? WorkspaceComposerLogic.message(code: row?.lastError ?? "gitFailed", detail: nil) : nil)
+        return AnyView(VStack(spacing: 12) {
+            Text(model.workspace.displayName).font(SmthzFont.ui(size: 16, weight: .semibold))
+            if let failure {
+                Text("Could not create this workspace").font(SmthzFont.ui(size: 13)).foregroundStyle(SmthzTheme.destructive)
+                Text(failure).font(SmthzFont.ui(size: 12)).foregroundStyle(SmthzTheme.mutedForeground).multilineTextAlignment(.center)
+                HStack {
+                    Button("Retry") { retryCreate(id) }.buttonStyle(SmthzButtonStyle(.primary, size: .small))
+                    Button("Delete") { discardFailed(id) }.buttonStyle(SmthzButtonStyle(.outline, size: .small))
+                }
+            } else {
+                Text(job.map { WorkspaceComposerLogic.phaseLabel($0.phase) } ?? "Creating").font(SmthzFont.ui(size: 13))
+                    .foregroundStyle(SmthzTheme.mutedForeground)
+                ProgressView(value: job?.fraction ?? 0).frame(width: 240)
+                if job != nil {
+                    Button(job?.cancelling == true ? "Cancelling…" : "Cancel") { lifecycle.cancel(id) }
+                        .buttonStyle(SmthzButtonStyle(.outline, size: .small)).disabled(job?.cancelling == true)
+                }
+            }
+        }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityElement(children: .contain)
+            .accessibilityLabel("Workspace creation"))
     }
     private func modal<V: View>(@ViewBuilder content: () -> V) -> some View {
         ZStack { Color.black.opacity(0.55).ignoresSafeArea().onTapGesture(perform: dismiss); content().padding(24) }
@@ -394,7 +647,7 @@ struct ShellView: View {
         case .appForceReload: monitorGeneration += 1
         case .worktreePalette: showJump()
         case .worktreeQuickOpen: overlay = .files
-        case .workspaceCreate: overlay = .newWorkspace
+        case .workspaceCreate: openComposer()
         case .viewTasks: appModel.destination = .tasks
         case .sidebarLeftToggle: sidebarOpen.toggle()
         case .sidebarRightToggle: rightSidebarOpen.toggle()

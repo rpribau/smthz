@@ -1,13 +1,21 @@
 import AppKit
 import SwiftUI
 
-// VISUAL-ONLY: stub data until the M4 workspace model; unsupported operations remain disabled.
+// Worktree entries are real since WP-M4-WORKTREE-APP; Move to Status, Open in apps, Sleep and
+// Developer stay disabled (VISUAL-ONLY) until their backends exist.
 struct SmthzWorkspaceActions {
     var rename: ((String) -> Void)?
     var setPinned: ((Bool) -> Void)?
     var setUnread: ((Bool) -> Void)?
     var sleep: (() -> Void)?
     var delete: (() -> Void)?
+    var edit: (() -> Void)?
+    var repositorySettings: (() -> Void)?
+    var removeParent: (() -> Void)?
+    var openParent: (() -> Void)?
+    var cancelCreate: (() -> Void)?
+    var retryCreate: (() -> Void)?
+    var reviewBranches: (() -> Void)?
 }
 
 private struct SmthzWorkspaceActionsKey: EnvironmentKey {
@@ -37,6 +45,9 @@ struct SmthzWorkspaceContextMenu: View {
     var body: some View {
         Text("Workspace").font(SmthzFont.ui(size: 11, weight: .medium))
         item("Update", "pencil", action: update)
+        item("Edit Workspace Details…", "pencil", action: actions.edit)
+        if let retry = actions.retryCreate { item("Retry Create", "rotate-cw", action: retry) }
+        if let cancel = actions.cancelCreate { item("Cancel Create", "x", action: cancel) }
         Menu { unavailable("No statuses available") } label: { label("Move to Status", "kanban") }.disabled(true)
         Divider()
         Menu {
@@ -52,10 +63,15 @@ struct SmthzWorkspaceContextMenu: View {
         item(data.isUnread ? "Mark Read" : "Mark Unread", data.isUnread ? "bell-off" : "bell",
              action: actions.setUnread.map { callback in { callback(!data.isUnread) } })
         Divider()
-        item(data.hasParent ? "Change Parent Worktree..." : "Set Parent Worktree...", "folder-tree")
+        item(data.hasParent ? "Change Parent Worktree..." : "Set Parent Worktree...", "folder-tree", action: actions.edit)
         if data.hasParent {
-            item("Open Parent Worktree", "workflow")
-            item("Remove from Parent", "unlink")
+            item("Open Parent Worktree", "workflow", action: actions.openParent)
+            item("Remove from Parent", "unlink", action: actions.removeParent)
+        }
+        if actions.repositorySettings != nil || actions.reviewBranches != nil {
+            Divider()
+            item("Repository Settings…", "settings", action: actions.repositorySettings)
+            item("Review Preserved Branches…", "git-branch", action: actions.reviewBranches)
         }
         #if DEBUG
         Divider()

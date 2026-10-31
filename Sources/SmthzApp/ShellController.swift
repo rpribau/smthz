@@ -374,6 +374,54 @@ final class ShellController {
         }
         await execute(effects)
     }
+    /// A new worktree becomes the active workspace with its own tabs: a shell in the checkout,
+    /// one tab per `defaultTabs` entry (command typed once the shell starts) and the host's setup
+    /// session, adopted by cwd and titled "Setup".
+    func openWorktree(_ key: WorkspaceKey, title: String, path: String,
+                      defaultTabs: [(title: String?, command: String?)], setupSessionID: String?) async {
+        activateWorkspace(key, displayName: title, rootPath: path)
+        if let setupSessionID { pendingTitles[setupSessionID] = "Setup"; applyPendingTitles() }
+        guard hostIsRunning else { return }
+        if workspace.tabs.values.allSatisfy({ tab in tab.panes.leaves.allSatisfy { workspace.panes[$0]?.binding?.sessionID == setupSessionID } }) {
+            await newShell()
+        }
+        for tab in defaultTabs { await openTab(title: tab.title, command: tab.command) }
+    }
+    private func openTab(title: String?, command: String?) async {
+        guard hostIsRunning, !creatingShell else { return }
+        creatingShell = true
+        defer { creatingShell = false }
+        let effects = apply(.createTab(activeKey, group: nil,
+            cwd: workspace.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.path, title: title))
+        if let size = TerminalSizeHint.latest {
+            for pane in effects.startPanes { _ = apply(.setPaneGrid(pane, cols: size.cols, rows: size.rows)) }
+        }
+        await execute(effects)
+        guard let command, !command.isEmpty else { return }
+        for pane in effects.startPanes {
+            if let session = anyPane(pane)?.binding?.sessionID {
+                do { try await executor.write(session, text: command + "\n") }
+                catch { actionError = "Could not run default tab command: \(error)" }
+            }
+        }
+    }
+    /// Titles for sessions the host started on our behalf (setup), applied once adopted.
+    private var pendingTitles: [String: String] = [:]
+    private func applyPendingTitles() {
+        for (session, title) in pendingTitles {
+            guard let key = state.workspaces.first(where: { $0.value.panes.values.contains { $0.binding?.sessionID == session } })?.key,
+                  let tab = state.workspaces[key]?.tabs.values.first(where: { tab in
+                      tab.panes.leaves.contains { state.workspaces[key]?.panes[$0]?.binding?.sessionID == session } }) else { continue }
+            _ = apply(.renameTab(tab.id, title))
+            pendingTitles.removeValue(forKey: session)
+        }
+    }
+    /// Layouts of deleted worktrees are dropped so their tabs do not linger.
+    func forgetWorkspace(_ key: WorkspaceKey) {
+        guard key != .home, state.workspaces[key] != nil else { return }
+        if activeKey == key { activateWorkspace(.home, displayName: state.workspaces[.home]?.displayName ?? "Default workspace", rootPath: nil) }
+        _ = apply(.closeWorkspace(key))
+    }
     func restart(_ id: String) async {
         guard let tab = tab(id), let pane = tab.panes.leaves.first(where: { workspace.panes[$0]?.binding?.sessionID == id }) else { return }
         let original = sessions.first { $0.id == id }
@@ -449,6 +497,7 @@ final class ShellController {
             for session in value.sessions where session.running && !attached.contains(session.id) && !stopping.contains(session.id) && !retiredSessions.contains(session.id) {
                 _ = apply(.adoptSession(adoptionKey(for: session.cwd), session, host: host))
             }
+            if !pendingTitles.isEmpty { applyPendingTitles() }
             if let selected, selectedSessionID != selected, visibleIDs.contains(selected) { selectedSessionID = selected }
         }
         await monitor.stop()
