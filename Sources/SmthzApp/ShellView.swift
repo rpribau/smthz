@@ -242,7 +242,7 @@ struct ShellView: View {
         if let overlay {
             switch overlay {
             case .jump: SmthzJumpPalette(model: palette, onAction: paletteAction, onDismiss: dismiss)
-            case .files: SmthzGoToFilePalette(root: model.rootURL, onOpen: { _ in unavailable("File editor") }, onDismiss: dismiss)
+            case .files: SmthzGoToFilePalette(root: model.rootURL, onOpen: { InterimFileOpener.open($0) }, onDismiss: dismiss)
             case .newWorkspace:
                 modal { SmthzNewWorkspaceComposer(onDismiss: dismiss, onAddProject: { self.overlay = .addProject },
                     onCreateShell: newShell, onAgentSettings: { dismiss(); openSettings("agents") }) }
@@ -399,6 +399,7 @@ struct ShellView: View {
         case .sidebarLeftToggle: sidebarOpen.toggle()
         case .sidebarRightToggle: rightSidebarOpen.toggle()
         case .sidebarExplorerToggle: showPanel(.explorer)
+        case .sidebarSearchToggle: showPanel(.search)
         case .sidebarSourceControlToggle: showPanel(.sourceControl)
         case .sidebarChecksToggle: showPanel(.checks)
         case .sidebarPortsToggle: showPanel(.ports)

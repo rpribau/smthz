@@ -11,6 +11,10 @@ struct CLIFlags {
         while i < arguments.count {
             let arg = arguments[i]
             if arg == "--json" { json = true }
+            else if ["--force", "--allow-failed-archive-hook", "--no-parent", "--unread", "--read", "--activate", "--pinned", "--archived", "--visible", "--include-hidden", "--include-archived", "--run-hooks"].contains(arg),
+                    i + 1 == arguments.count || !["true", "false"].contains(arguments[i + 1]) {
+                values[String(arg.dropFirst(2))] = "true"
+            }
             else if arg.hasPrefix("--") {
                 guard i + 1 < arguments.count else { throw HostRPCError("badRequest", detail: "missing value for \(arg)") }
                 i += 1; values[String(arg.dropFirst(2))] = arguments[i]

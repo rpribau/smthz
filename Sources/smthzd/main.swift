@@ -62,7 +62,6 @@ do {
     let store = try WorkspaceStore(path: directory.appendingPathComponent("workspace.sqlite").path)
     try store.reconcileAfterRestart()
     let router = HostRouter()
-    WorktreeRPC.register(on: router, store: store)
     GitWriteRPC.register(on: router, store: store)
     FilesRPC.register(on: router, store: store)
     CleanupRPC.register(on: router, store: store)
@@ -70,6 +69,7 @@ do {
     let scrollback = directory.appendingPathComponent("scrollback", isDirectory: true)
     let manager = SessionManager(journal: journal, scrollbackDirectory: scrollback,
                                  scrollbackLimit: 16 * 1_048_576)
+    WorktreeRPC.register(on: router, store: store, sessions: manager)
     RepoRPC.register(on: router, store: store,
                      liveSessionCWDs: { manager.list().filter(\.running).compactMap(\.cwd) })
     signal(SIGINT, SIG_IGN)

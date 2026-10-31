@@ -91,7 +91,7 @@ struct HostRouterTests {
         f.router.register("test.slowMutation", methodClass: .mutation) { _, context in
             let result = BlockingGitResult()
             Task {
-                do { result.finish(.success(try await GitService().run(["-c", "alias.slow=!exec /bin/sleep 30", "slow"],
+                do { result.finish(.success(try await GitService().run(["-c", "alias.slow=!echo $$ > deadline-child.pid; exec /bin/sleep 30", "slow"],
                     at: directory, control: context.processControl))) }
                 catch { result.finish(.failure(error)) }
             }
@@ -100,7 +100,16 @@ struct HostRouterTests {
         }
         let start = ContinuousClock.now
         #expect(try f.call("test.slowMutation", id: "deadline", timeout: 100)["error"] == .string("deadlineExceeded"))
-        #expect(start.duration(to: .now) < .seconds(3))
+        // Launch/reap can be delayed by concurrent test processes; the request must
+        // still return close to its deadline, well before the child's 30 s sleep.
+        #expect(start.duration(to: .now) < .milliseconds(100) + .seconds(5))
+        if let text = try? String(contentsOf: directory.appendingPathComponent("deadline-child.pid"), encoding: .utf8),
+           let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+           let child = ProcessIdentity.lookup(pid: pid) {
+            let reapDeadline = ContinuousClock.now + .seconds(3)
+            while child.isStillRunning(), ContinuousClock.now < reapDeadline { Thread.sleep(forTimeInterval: 0.01) }
+            #expect(!child.isStillRunning(), "deadline left its Git child alive")
+        }
         #expect(try f.journal.entry(requestID: "deadline") == nil)
     }
 

@@ -114,7 +114,7 @@ struct SmthzShellCommands: Commands {
             }
             Divider()
             action(.worktreePalette); action(.worktreeQuickOpen)
-            action(.sidebarExplorerToggle); action(.sidebarSourceControlToggle)
+            action(.sidebarExplorerToggle); action(.sidebarSearchToggle); action(.sidebarSourceControlToggle)
             action(.sidebarChecksToggle); action(.sidebarPortsToggle)
             Divider()
             action(.zoomReset); action(.zoomIn); action(.zoomOut)

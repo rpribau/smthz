@@ -8,15 +8,15 @@ enum RightSidebarBarPosition: String { case top, side }
 
 /// Right sidebar panels (UI-SPEC §7, UI-DETAIL §5).
 enum RightSidebarPanel: String, CaseIterable, Identifiable {
-    case explorer, agents, workspaces, checks, sourceControl, ports
+    case explorer, search, agents, workspaces, checks, sourceControl, ports
 
     var id: String { rawValue }
 
     /// Items in Orca's order; `workspaces` and the folder-flavoured `checks` are folder-workspace only.
     static func items(for kind: RightSidebarWorkspaceKind) -> [RightSidebarPanel] {
         switch kind {
-        case .git: [.explorer, .agents, .sourceControl, .checks, .ports]
-        case .folder: [.explorer, .agents, .workspaces, .checks, .ports]
+        case .git: [.explorer, .search, .agents, .sourceControl, .checks, .ports]
+        case .folder: [.explorer, .search, .agents, .workspaces, .checks, .ports]
         }
     }
 
@@ -28,6 +28,7 @@ enum RightSidebarPanel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .explorer: "Explorer"
+        case .search: "Search"
         case .agents: "Agents"
         case .workspaces: "Attached worktrees"
         case .checks: "Checks"
@@ -39,6 +40,7 @@ enum RightSidebarPanel: String, CaseIterable, Identifiable {
     var shortcut: String? {
         switch self {
         case .explorer: "⌘⇧E"
+        case .search: "⌘⇧F"
         case .sourceControl: "⌘⇧G"
         case .ports: "⌘⇧I"
         default: nil
@@ -50,6 +52,7 @@ enum RightSidebarPanel: String, CaseIterable, Identifiable {
     var icon: SmthzIcon.Name {
         switch self {
         case .explorer: .files
+        case .search: .search
         case .agents: .history
         case .workspaces: .workflow
         case .checks: .listChecks
@@ -62,6 +65,7 @@ enum RightSidebarPanel: String, CaseIterable, Identifiable {
     var emptyTitle: String {
         switch self {
         case .explorer: "Select a workspace to browse files"
+        case .search: "Select a workspace to search files"
         case .agents: "No agent sessions"
         case .workspaces: "No attached worktrees yet"
         case .checks: "No workspace selected"
