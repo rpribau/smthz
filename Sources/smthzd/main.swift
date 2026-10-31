@@ -71,7 +71,8 @@ do {
         DispatchQueue.main.async { _ = Darwin.kill(getpid(), SIGTERM) }
     })
     let server = try UnixSocketServer(path: socketPath, handler: { service.handle($0) },
-                                      afterResponse: { service.responseFlushed($0) })
+                                      afterResponse: { service.responseFlushed($0) },
+                                      streamHandler: { service.stream($0, send: $1, cancelled: $2) })
     let sources = [SIGINT, SIGTERM].map { number in
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {

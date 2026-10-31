@@ -2,6 +2,18 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import SmthzCore
+
+struct ShellTabGroupItem: Identifiable {
+    let id: String
+    let title: String
+    let color: Color?
+    let collapsed: Bool
+}
+enum ShellGroupAction {
+    case create(String), rename(String, String), color(String, TabColor?), collapse(String, Bool), ungroup(String), move(String, String)
+}
+
 
 struct TabCreateAction: Identifiable {
     let id: String
@@ -31,7 +43,11 @@ struct TabStripView: View {
     var closeOthers: ((String) -> Void)? = nil
     var colourChange: ((String, Color?) -> Void)? = nil
     var copyResult: ((Bool) -> Void)? = nil
+    var groups: [ShellTabGroupItem] = []
+    var groupAction: ((ShellGroupAction) -> Void)? = nil
     var focused = true
+    @State private var renameGroupID: String?
+    @State private var groupName = ""
     @State private var hovered = false
     @State private var plusHovered = false
     @State private var windowWidth: CGFloat = 0
@@ -48,7 +64,7 @@ struct TabStripView: View {
                 ? SmthzMetrics.tabWidthWide : SmthzMetrics.tabWidth
             HStack(spacing: 0) {
                 scrollingTabs(tabWidth: tabWidth, showChevrons: geometry.size.width >= 260)
-                    .frame(maxWidth: CGFloat(tabs.count) * tabWidth)
+                    .frame(maxWidth: CGFloat(tabs.count) * tabWidth + CGFloat(groups.count) * 100)
                 SmthzTabCreateMenu(actions: createActions, tabs: tabs, select: select)
                 .frame(width: 28, height: 28)
                 .foregroundStyle(SmthzTheme.mutedForeground)
@@ -100,6 +116,14 @@ struct TabStripView: View {
             .onHover { hovered = $0 }
         }
         .frame(height: SmthzMetrics.tabStripHeight)
+        .alert("Rename Group", isPresented: Binding(get: { renameGroupID != nil }, set: { if !$0 { renameGroupID = nil } })) {
+            TextField("Group name", text: $groupName)
+            Button("Cancel", role: .cancel) { renameGroupID = nil }
+            Button("Rename") {
+                if let id = renameGroupID { groupAction?(.rename(id, groupName)) }
+                renameGroupID = nil
+            }
+        }
     }
 
     private func scrollingTabs(tabWidth: CGFloat, showChevrons: Bool) -> some View {
@@ -113,11 +137,17 @@ struct TabStripView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
                         ForEach(tabs) { tab in
+                            if let group = groups.first(where: { $0.id == tab.groupID }),
+                               tabs.first(where: { $0.groupID == group.id })?.id == tab.id {
+                                groupHeader(group)
+                            }
+                            if groups.first(where: { $0.id == tab.groupID })?.collapsed != true {
                             ShellTabView(tab: tab, width: tabWidth,
                                 select: { select(tab.id) }, close: { close(tab.id) },
                                 rename: { rename(tab.id, $0) }, togglePin: { togglePin(tab.id) },
                                 closeOthers: tabs.contains(where: { $0.id != tab.id && !$0.pinned })
                                     ? { closeOtherTabs(except: tab.id) } : nil,
+                                createGroup: groupAction.map { action in { action(.create(tab.id)) } },
                                 split: split.map { action in { down in action(tab.id, down) } },
                                 moveToPane: moveToPane.map { action in { side in action(tab.id, side) } },
                                 equalize: equalize.map { action in { action(tab.id) } },
@@ -138,6 +168,7 @@ struct TabStripView: View {
                                             .allowsHitTesting(false)
                                     }
                                 }
+                            }
                         }
                     }
                 }
@@ -173,6 +204,40 @@ struct TabStripView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func groupHeader(_ group: ShellTabGroupItem) -> some View {
+        Button { groupAction?(.collapse(group.id, !group.collapsed)) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: group.collapsed ? "chevron.right" : "chevron.down")
+                Text(group.title).lineLimit(1)
+            }.font(SmthzFont.ui(size: 11, weight: .medium))
+                .padding(.horizontal, 8).frame(height: 26)
+                .foregroundStyle(group.color ?? SmthzTheme.foreground)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Group " + group.title)
+        .contextMenu {
+            Button("Rename Group…") { groupName = group.title; renameGroupID = group.id }
+            Menu("Group Colour") {
+                Button("Default") { groupAction?(.color(group.id, nil)) }
+                ForEach(TabColor.allCases, id: \.self) { color in
+                    Button(color.rawValue.capitalized) { groupAction?(.color(group.id, color)) }
+                }
+            }
+            Button(group.collapsed ? "Expand Group" : "Collapse Group") { groupAction?(.collapse(group.id, !group.collapsed)) }
+            Menu("Move Tab Here") {
+                ForEach(tabs.filter { $0.groupID != group.id }) { tab in
+                    Button(tab.title) { groupAction?(.move(tab.id, group.id)) }
+                }
+            }
+            Button("Ungroup") { groupAction?(.ungroup(group.id)) }
+        }
+        .onDrop(of: [UTType.text], isTargeted: nil) { providers in
+            guard let source = draggedID else { return false }
+            groupAction?(.move(source, group.id)); draggedID = nil
+            return true
         }
     }
 

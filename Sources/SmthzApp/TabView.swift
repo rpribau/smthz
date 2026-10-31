@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SmthzCore
 
 /// A presentation value, deliberately independent of the future ShellController.
 struct ShellTabItem: Identifiable {
@@ -13,6 +14,7 @@ struct ShellTabItem: Identifiable {
     var kind = "Terminal"
     var cwd: String? = nil
     var agent: String? = nil
+    var groupID: String? = nil
     var hasSplitGroups = false
 }
 
@@ -46,6 +48,7 @@ struct ShellTabView: View {
     let rename: (String) -> Void
     let togglePin: () -> Void
     var closeOthers: (() -> Void)? = nil
+    var createGroup: (() -> Void)? = nil
     var split: ((Bool) -> Void)? = nil
     var moveToPane: ((String) -> Void)? = nil
     var equalize: (() -> Void)? = nil
@@ -200,9 +203,8 @@ struct ShellTabView: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.font = SmthzFont.nsUI(size: 12, wght: 450)
-        menu.addAction("Split terminal right", icon: "panel-right-close", key: "d", enabled: split != nil) { split?(false) }
-        menu.addAction("Split terminal down", icon: "panel-bottom-close", key: "d",
-                       modifiers: [.command, .shift], enabled: split != nil) { split?(true) }
+        menu.addAction("Split terminal right", icon: "panel-right-close", binding: .terminalSplitRight, enabled: split != nil) { split?(false) }
+        menu.addAction("Split terminal down", icon: "panel-bottom-close", binding: .terminalSplitDown, enabled: split != nil) { split?(true) }
         let move = menu.addAction("Move Tab to Split", icon: "columns-2", enabled: moveToPane != nil) {}
         let directions = NSMenu()
         directions.autoenablesItems = false
@@ -216,19 +218,20 @@ struct ShellTabView: View {
                        enabled: collapsePane != nil) { collapsePane?() }
         menu.addItem(.separator())
         menu.addAction(tab.pinned ? "Unpin Tab" : "Pin Tab", icon: tab.pinned ? "pin-off" : "pin", togglePin)
+        menu.addAction("New Group from Tab", enabled: createGroup != nil) { createGroup?() }
         menu.addAction("Copy Tab ID", icon: "copy") {
             NSPasteboard.general.clearContents()
             let copied = NSPasteboard.general.setString(tab.id, forType: .string)
             onCopyResult?(copied)
         }
         menu.addItem(.separator())
-        menu.addAction("Close", icon: "x", key: "w", enabled: !tab.pinned, close)
+        menu.addAction("Close", icon: "x", binding: .tabClose, enabled: !tab.pinned, close)
         menu.addAction("Close Others", icon: "list-x", enabled: closeOthers != nil) { closeOthers?() }
         if closeSplitPane != nil {
             menu.addAction("Close split pane", icon: "x", enabled: closeSplitPane != nil) { closeSplitPane?() }
         }
         menu.addItem(.separator())
-        menu.addAction("Change Title", icon: "pencil", key: "r", beginRename)
+        menu.addAction("Change Title", icon: "pencil", binding: .tabRename, beginRename)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem.sectionHeader(title: "Tab Color"))
         let swatches = NSMenuItem()
@@ -308,8 +311,7 @@ private struct SmthzTabRenameShortcut: NSViewRepresentable {
                 let handled = MainActor.assumeIsolated {
                     guard let self, self.enabled, self.window?.isKeyWindow == true,
                           event.window === self.window,
-                          event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-                          event.charactersIgnoringModifiers?.lowercased() == "r" else { return false }
+                          SmthzKeybindings.shared.matches(event, action: .tabRename) else { return false }
                     self.rename()
                     return true
                 }
@@ -373,14 +375,27 @@ private final class SmthzTabMenuAction: NSObject {
     @objc func invoke(_ sender: Any?) { perform() }
 }
 
+@MainActor
 private extension NSMenu {
     @discardableResult
-    func addAction(_ title: String, icon: String? = nil, key: String = "",
+    func addAction(_ title: String, icon: String? = nil, key: String = "", binding: KeybindingAction? = nil,
                    modifiers: NSEvent.ModifierFlags = .command, enabled: Bool = true,
                    _ action: @escaping () -> Void) -> NSMenuItem {
         let target = SmthzTabMenuAction(action)
         let item = NSMenuItem(title: title, action: #selector(SmthzTabMenuAction.invoke(_:)), keyEquivalent: key)
         item.keyEquivalentModifierMask = modifiers
+        if let binding {
+            item.keyEquivalent = ""
+            if let shortcut = SmthzKeybindings.shared.shortcut(binding) {
+                item.keyEquivalent = String(shortcut.key.character)
+                var flags: NSEvent.ModifierFlags = []
+                if shortcut.modifiers.contains(.command) { flags.insert(.command) }
+                if shortcut.modifiers.contains(.option) { flags.insert(.option) }
+                if shortcut.modifiers.contains(.control) { flags.insert(.control) }
+                if shortcut.modifiers.contains(.shift) { flags.insert(.shift) }
+                item.keyEquivalentModifierMask = flags
+            }
+        }
         item.isEnabled = enabled
         item.target = target
         item.representedObject = target // NSMenuItem.target is weak.

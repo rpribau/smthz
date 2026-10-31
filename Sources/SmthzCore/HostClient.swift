@@ -4,12 +4,14 @@ public enum HostClientError: Error, Equatable, Sendable, CustomStringConvertible
     case hostNotRunning
     case hostError(code: String)
     case invalidResponse
+    case streamBackpressure
 
     public var description: String {
         switch self {
         case .hostNotRunning: "smthzd is not running"
         case .hostError(let code): "smthzd: \(code)"
         case .invalidResponse: "invalid response from smthzd"
+        case .streamBackpressure: "terminal subscriber fell behind; resume from the last consumed cursor"
         }
     }
 }
@@ -62,9 +64,13 @@ public struct HostSessionList: Decodable, Sendable {
 public final class HostClient {
     private struct Status: Decodable { let ok: Bool; let error: String? }
     private let transport: UnixSocketClient
+    private let socketPath: String
+    private let capabilityTokenPath: String?
     private var credential: String?
 
     public init(socketPath: String, capabilityTokenPath: String? = nil) throws {
+        self.socketPath = socketPath
+        self.capabilityTokenPath = capabilityTokenPath
         do { transport = try UnixSocketClient(path: socketPath) }
         catch UnixSocketError.connectFailed { throw HostClientError.hostNotRunning }
         do {
@@ -80,6 +86,78 @@ public final class HostClient {
     }
 
     public func disconnect() { transport.close() }
+
+    public static let maximumBufferedStreamFrames = 8
+
+    /// Owns a separate authenticated socket, leaving writes/resizes responsive.
+    /// Output is bounded to eight 64 KiB frames. On overflow the stream fails;
+    /// resubscribe with the last *consumed* cursor to replay bytes without loss.
+    public func subscribe(id: String, fromCursor: UInt64 = 0) -> AsyncThrowingStream<HostReadResult, any Error> {
+        let socket = socketPath
+        let token = capabilityTokenPath
+        return AsyncThrowingStream(bufferingPolicy: .bufferingOldest(Self.maximumBufferedStreamFrames)) { continuation in
+            let worker = SubscriptionWorker(socket: socket, token: token, id: id,
+                cursor: fromCursor, continuation: continuation)
+            continuation.onTermination = { [weak worker] _ in worker?.cancel() }
+            Thread.detachNewThread { worker.run() }
+        }
+    }
+
+    private final class SubscriptionWorker: @unchecked Sendable {
+        let socket: String
+        let token: String?
+        let id: String
+        let cursor: UInt64
+        let continuation: AsyncThrowingStream<HostReadResult, any Error>.Continuation
+        let lock = NSLock()
+        var cancelled = false
+        var client: HostClient?
+
+        init(socket: String, token: String?, id: String, cursor: UInt64,
+             continuation: AsyncThrowingStream<HostReadResult, any Error>.Continuation) {
+            self.socket = socket; self.token = token; self.id = id; self.cursor = cursor
+            self.continuation = continuation
+        }
+
+        func cancel() {
+            lock.withLock { cancelled = true; client?.transport.interrupt() }
+        }
+
+        func run() {
+            do {
+                let connection = try HostClient(socketPath: socket, capabilityTokenPath: token)
+                defer {
+                    lock.withLock { client = nil }
+                    connection.disconnect()
+                }
+                let stopped = lock.withLock {
+                    client = connection
+                    return cancelled
+                }
+                guard !stopped else { continuation.finish(); return }
+                struct Params: Encodable { let id: String; let fromCursor: UInt64 }
+                let requestID = RequestID.generate().rawValue
+                let _: HostAcknowledgement = try connection.call(method: "session.subscribe",
+                    params: Params(id: id, fromCursor: cursor), requestID: requestID)
+                while !lock.withLock({ cancelled }) {
+                    let response = try JSONDecoder().decode(RPCEnvelope.self, from: connection.transport.receive())
+                    guard response.version == RPCEnvelope.currentVersion, response.requestID == requestID,
+                          response.method == "session.subscribe" else { throw HostClientError.invalidResponse }
+                    let status = try JSONDecoder().decode(Status.self, from: response.payload)
+                    guard status.ok else { throw HostClientError.hostError(code: status.error ?? "unknownError") }
+                    let event = try JSONDecoder().decode(HostReadResult.self, from: response.payload)
+                    switch continuation.yield(event) {
+                    case .enqueued: break
+                    case .dropped: throw HostClientError.streamBackpressure
+                    case .terminated: return
+                    @unknown default: return
+                    }
+                    if event.exit != nil { break }
+                }
+                continuation.finish()
+            } catch { continuation.finish(throwing: error) }
+        }
+    }
 
     public func call<Params: Encodable, Result: Decodable>(method: String, params: Params,
         requestID: String = RequestID.generate().rawValue, timeoutMilliseconds: Int = 5_000) throws -> Result {

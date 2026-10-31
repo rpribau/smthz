@@ -56,7 +56,7 @@ public extension ShellState {
              .setGroupRatio(let key, _, _), .reopenClosedTab(let key), .adoptSession(let key, _, _): return key
         case .closeTab(let id, _), .closeOtherTabs(let id), .closeTabsToRight(let id), .closeTabsToLeft(let id),
              .activateTab(let id), .renameTab(let id, _), .setTabColor(let id, _), .setPinned(let id, _),
-             .duplicateTab(let id), .moveTab(let id, _, _), .moveTabToSplit(let id, _),
+             .duplicateTab(let id), .createGroup(let id, _), .moveTab(let id, _, _), .moveTabToSplit(let id, _),
              .splitPane(let id, _, _), .closePane(let id, _), .focusPane(let id, _),
              .focusNextPane(let id), .focusPreviousPane(let id), .toggleExpandPane(let id, _),
              .equalizePanes(let id), .setPaneRatio(let id, _, _): tab = id
@@ -66,7 +66,8 @@ public extension ShellState {
                 throw ShellRefusal.paneNotFound
             }
             return key
-        case .activateGroup(let id):
+        case .activateGroup(let id), .renameGroup(let id, _), .setGroupColor(let id, _),
+             .setGroupCollapsed(let id, _), .ungroup(let id):
             guard let key = workspaces.first(where: { $0.value.groups[id] != nil })?.key else { throw ShellRefusal.groupNotFound }
             return key
         default: throw ShellRefusal.invalid("not implemented")
@@ -130,6 +131,10 @@ extension WorkspaceLayout {
         case .setPinned(let id, let pinned):
             guard tabs[id] != nil else { throw ShellRefusal.tabNotFound }
             tabs[id]!.isPinned = pinned
+            let group = try groupContaining(id)
+            groups[group]!.tabOrder.removeAll { $0 == id }
+            let boundary = groups[group]!.tabOrder.filter { tabs[$0]?.isPinned == true }.count
+            groups[group]!.tabOrder.insert(id, at: boundary)
         case .duplicateTab(let id):
             let group = try groupContaining(id)
             let original = tabs[id]!
@@ -142,9 +147,40 @@ extension WorkspaceLayout {
             guard groups[target] != nil else { throw ShellRefusal.groupNotFound }
             removeFromGroup([id], group: source)
             if source != target { collapseEmptyGroup(source) }
-            let insertion = min(max(0, index), groups[target]!.tabOrder.count)
+            let boundary = groups[target]!.tabOrder.filter { tabs[$0]?.isPinned == true }.count
+            let insertion = tabs[id]!.isPinned
+                ? min(max(0, index), boundary)
+                : min(max(boundary, index), groups[target]!.tabOrder.count)
             groups[target]!.tabOrder.insert(id, at: insertion)
             try activate(id)
+        case .createGroup(let id, let name):
+            let source = try groupContaining(id)
+            if groups[source]!.tabOrder.count > 1 {
+                try applyTabCommand(.moveTabToSplit(id, side: .right), now: now, ids: &ids, effects: &effects)
+            } else { activeGroup = source }
+            groups[activeGroup!]!.name = Self.normalizedTitle(name) ?? "Group"
+        case .renameGroup(let id, let name):
+            guard groups[id] != nil else { throw ShellRefusal.groupNotFound }
+            groups[id]!.name = Self.normalizedTitle(name)
+        case .setGroupColor(let id, let color):
+            guard groups[id] != nil else { throw ShellRefusal.groupNotFound }
+            groups[id]!.color = color
+        case .setGroupCollapsed(let id, let collapsed):
+            guard groups[id] != nil else { throw ShellRefusal.groupNotFound }
+            groups[id]!.collapsed = collapsed
+        case .ungroup(let id):
+            guard let group = groups[id] else { throw ShellRefusal.groupNotFound }
+            guard let target = groupLayout?.leaves.first(where: { $0 != id }) else {
+                groups[id]!.name = nil; groups[id]!.color = nil; groups[id]!.collapsed = nil
+                break
+            }
+            let order = groups[target]!.tabOrder + group.tabOrder
+            groups[target]!.tabOrder = order.filter { tabs[$0]?.isPinned == true }
+                + order.filter { tabs[$0]?.isPinned != true }
+            groups[target]!.recentTabIDs += group.recentTabIDs
+            if activeGroup == id { groups[target]!.activeTab = group.activeTab; activeGroup = target }
+            groups.removeValue(forKey: id)
+            groupLayout = groupLayout?.removing(id)
         case .moveTabToSplit(let id, let side):
             let source = try groupContaining(id)
             guard groups[source]!.tabOrder.count > 1 else {
@@ -191,6 +227,7 @@ extension WorkspaceLayout {
         let group = try groupContaining(tab)
         activeGroup = group
         groups[group]!.activeTab = tab
+        groups[group]!.collapsed = false
         groups[group]!.recentTabIDs.removeAll { $0 == tab }
         groups[group]!.recentTabIDs.append(tab)
     }
@@ -224,7 +261,9 @@ extension WorkspaceLayout {
                                       customTitle: Self.normalizedTitle(title), color: color, isPinned: pinned,
                                       panes: .leaf(pane), activePane: pane, startupCwd: cwd)
         panes[pane] = PaneRecord(id: pane, startupCwd: cwd)
-        groups[group]!.tabOrder.insert(tab, at: min(max(0, index), groups[group]!.tabOrder.count))
+        let boundary = groups[group]!.tabOrder.filter { tabs[$0]?.isPinned == true }.count
+        let insertion = pinned ? min(max(0, index), boundary) : min(max(boundary, index), groups[group]!.tabOrder.count)
+        groups[group]!.tabOrder.insert(tab, at: insertion)
         try activate(tab)
         effects.startPanes.append(pane)
     }

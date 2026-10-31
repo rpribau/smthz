@@ -115,56 +115,119 @@ public enum KeyChordParseError: Error, Equatable, Sendable {
     case unknownKey(String)
 }
 
-/// The M3 subset of Orca action ids. Raw values are the Orca ids.
+/// Orca 1.4.238's complete 91-action registry. Unavailable actions retain their
+/// metadata and defaults for the editor, but are never dispatched by the app.
 public enum KeybindingAction: String, CaseIterable, Sendable, Codable {
+    case worktreeQuickOpen = "worktree.quickOpen"
+    case appSettings = "app.settings"
+    case appForceReload = "app.forceReload"
+    case worktreePalette = "worktree.palette"
+    case worktreeNavigateUp = "worktree.navigateUp"
+    case worktreeNavigateDown = "worktree.navigateDown"
+    case workspaceCreate = "workspace.create"
+    case workspaceRename = "workspace.rename"
+    case workspaceDelete = "workspace.delete"
+    case workspaceOpenBoard = "workspace.openBoard"
+    case dashboardToggle = "dashboard.toggle"
+    case workspaceSelectByIndex = "workspace.selectByIndex"
+    case voiceDictation = "voice.dictation"
+    case viewTasks = "view.tasks"
+    case sidebarLeftToggle = "sidebar.left.toggle"
+    case sidebarRightToggle = "sidebar.right.toggle"
+    case sidebarExplorerToggle = "sidebar.explorer.toggle"
+    case sidebarSearchToggle = "sidebar.search.toggle"
+    case sidebarSourceControlToggle = "sidebar.sourceControl.toggle"
+    case sidebarChecksToggle = "sidebar.checks.toggle"
+    case sidebarPortsToggle = "sidebar.ports.toggle"
+    case sidebarSleepingWorkspacesToggle = "sidebar.sleepingWorkspaces.toggle"
+    case sidebarFocusWorktreeList = "sidebar.focusWorktreeList"
+    case floatingTerminalToggle = "floatingTerminal.toggle"
+    case floatingWorkspaceMaximize = "floatingWorkspace.maximize"
+    case floatingWorkspaceMinimize = "floatingWorkspace.minimize"
+    case zoomIn = "zoom.in"
+    case zoomOut = "zoom.out"
+    case zoomReset = "zoom.reset"
+    case worktreeHistoryBack = "worktree.history.back"
+    case worktreeHistoryForward = "worktree.history.forward"
     case tabNewTerminal = "tab.newTerminal"
+    case tabNewAgent = "tab.newAgent"
+    case tabNewBrowser = "tab.newBrowser"
+    case tabNewSimulator = "tab.newSimulator"
+    case tabNewMarkdown = "tab.newMarkdown"
+    case tabOpenMarkdown = "tab.openMarkdown"
     case tabClose = "tab.close"
     case tabCloseAll = "tab.closeAll"
     case tabRename = "tab.rename"
     case tabReopenClosed = "tab.reopenClosed"
-    case tabNextAllTypes = "tab.nextAllTypes"
-    case tabPreviousAllTypes = "tab.previousAllTypes"
     case tabNextSameType = "tab.nextSameType"
     case tabPreviousSameType = "tab.previousSameType"
+    case tabNextAllTypes = "tab.nextAllTypes"
+    case tabPreviousAllTypes = "tab.previousAllTypes"
     case tabPreviousRecent = "tab.previousRecent"
     case tabNextTerminal = "tab.nextTerminal"
     case tabPreviousTerminal = "tab.previousTerminal"
     case tabSelectByIndex = "tab.selectByIndex"
+    case tabOpenQuickCommandsMenu = "tab.openQuickCommandsMenu"
+    case browserFind = "browser.find"
+    case browserBack = "browser.back"
+    case browserForward = "browser.forward"
+    case browserReload = "browser.reload"
+    case browserHardReload = "browser.hardReload"
+    case browserFocusAddressBar = "browser.focusAddressBar"
+    case browserGrabElement = "browser.grabElement"
+    case browserAnnotateElement = "browser.annotateElement"
+    case editorFind = "editor.find"
+    case editorReplace = "editor.replace"
+    case editorSave = "editor.save"
+    case editorMarkdownPreview = "editor.markdownPreview"
+    case editorToggleWordWrap = "editor.toggleWordWrap"
+    case editorCopyContext = "editor.copyContext"
+    case editorPreviousChange = "editor.previousChange"
+    case editorNextChange = "editor.nextChange"
+    case editorAddReviewNote = "editor.addReviewNote"
+    case sourceControlSendReviewNotes = "sourceControl.sendReviewNotes"
+    case fileExplorerUndo = "fileExplorer.undo"
+    case fileExplorerRedo = "fileExplorer.redo"
+    case fileExplorerCopyPath = "fileExplorer.copyPath"
+    case fileExplorerCopyRelativePath = "fileExplorer.copyRelativePath"
+    case fileExplorerDelete = "fileExplorer.delete"
+    case settingsSearch = "settings.search"
+    case terminalCopySelection = "terminal.copySelection"
+    case terminalSelectAll = "terminal.selectAll"
+    case terminalPaste = "terminal.paste"
+    case terminalSearch = "terminal.search"
+    case terminalClear = "terminal.clear"
+    case terminalFocusNextPane = "terminal.focusNextPane"
+    case terminalFocusPreviousPane = "terminal.focusPreviousPane"
+    case terminalEqualizePaneSizes = "terminal.equalizePaneSizes"
+    case terminalExpandPane = "terminal.expandPane"
+    case terminalSetTitle = "terminal.setTitle"
+    case chatFind = "chat.find"
+    case sidebarChildWorkspacesToggle = "sidebar.childWorkspaces.toggle"
+    case terminalClearPaneTitle = "terminal.clearPaneTitle"
     case terminalClosePane = "terminal.closePane"
     case terminalSplitRight = "terminal.splitRight"
     case terminalSplitDown = "terminal.splitDown"
-    case terminalFocusNextPane = "terminal.focusNextPane"
-    case terminalFocusPreviousPane = "terminal.focusPreviousPane"
-    case terminalExpandPane = "terminal.expandPane"
-    case terminalEqualizePaneSizes = "terminal.equalizePaneSizes"
-    case terminalSetTitle = "terminal.setTitle"
-    case terminalClearPaneTitle = "terminal.clearPaneTitle"
-    case terminalCopySelection = "terminal.copySelection"
-    case terminalPaste = "terminal.paste"
-    case terminalSelectAll = "terminal.selectAll"
-    case terminalSearch = "terminal.search"
-    case terminalClear = "terminal.clear"
-    case workspaceSelectByIndex = "workspace.selectByIndex"
-    case worktreeNavigateUp = "worktree.navigateUp"
-    case worktreeNavigateDown = "worktree.navigateDown"
-    case worktreePalette = "worktree.palette"
-    case worktreeHistoryBack = "worktree.history.back"
-    case worktreeHistoryForward = "worktree.history.forward"
-    case sidebarLeftToggle = "sidebar.left.toggle"
-    case floatingTerminalToggle = "floatingTerminal.toggle"
-    case zoomIn = "zoom.in"
-    case zoomOut = "zoom.out"
-    case zoomReset = "zoom.reset"
+    case terminalSwitchInputSource = "terminal.switchInputSource"
 
-    /// Conflicts are only reported between actions of the same scope.
-    public var scope: KeybindingScope {
-        rawValue.hasPrefix("terminal.") ? .terminal : .window
-    }
+    public var definition: KeybindingDefinition { KeybindingRegistry.definitions.first { $0.action == self }! }
+    public var scope: KeybindingScope { definition.scope }
+    public var available: Bool { definition.available }
 }
 
-public enum KeybindingScope: String, Sendable {
-    case window
-    case terminal
+public enum KeybindingScope: String, CaseIterable, Sendable {
+    case window = "global"
+    case tabs, terminal, browser, editor, fileExplorer, settings, chat
+}
+
+public struct KeybindingDefinition: Sendable {
+    public let action: KeybindingAction
+    public let title: String
+    public let group: String
+    public let scope: KeybindingScope
+    public let conflictGroup: String?
+    public let available: Bool
+    public let defaultBindings: [String]
 }
 
 public struct KeybindingDiagnostic: Equatable, Sendable {
@@ -187,55 +250,136 @@ public struct KeybindingRegistry: Sendable {
         self.bindings = bindings
     }
 
-    /// Orca 1.4.238 darwin defaults, M3 subset. The index actions expand
-    /// Orca's representative chord (`Ctrl+1`, `Mod+1`) to digits 1 through 9.
+    /// Ordered exactly like definitions-core-1...4.ts. D7 reserves Cmd-N for
+    /// native windows; Cmd-Shift-N opens the workspace composer. Zoom changes
+    /// terminal typography, not the native interface scale.
+    public static let definitions: [KeybindingDefinition] = [
+        .init(action: .worktreeQuickOpen, title: "Go to File", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+P"]),
+        .init(action: .appSettings, title: "Open Settings", group: "Global", scope: .window, conflictGroup: "menu", available: true, defaultBindings: []),
+        .init(action: .appForceReload, title: "Force Reload", group: "Global", scope: .window, conflictGroup: "menu", available: true, defaultBindings: ["Mod+Shift+R"]),
+        .init(action: .worktreePalette, title: "Switch worktree", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+J"]),
+        .init(action: .worktreeNavigateUp, title: "Previous worktree", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+ArrowUp"]),
+        .init(action: .worktreeNavigateDown, title: "Next worktree", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+ArrowDown"]),
+        .init(action: .workspaceCreate, title: "Create worktree", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+N"]),
+        .init(action: .workspaceRename, title: "Rename worktree", group: "Global", scope: .window, conflictGroup: "workspace-shell", available: false, defaultBindings: ["Mod+Alt+R"]),
+        .init(action: .workspaceDelete, title: "Delete Workspace", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+Backspace"]),
+        .init(action: .workspaceOpenBoard, title: "Toggle Workspace Board", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: []),
+        .init(action: .dashboardToggle, title: "Toggle Agent Dashboard", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: []),
+        .init(action: .workspaceSelectByIndex, title: "Select Workspace 1–9", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+1"]),
+        .init(action: .voiceDictation, title: "Dictation", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+E"]),
+        .init(action: .viewTasks, title: "Open Tasks", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: []),
+        .init(action: .sidebarLeftToggle, title: "Toggle Sidebar", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+B"]),
+        .init(action: .sidebarRightToggle, title: "Toggle Right Sidebar", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+L"]),
+        .init(action: .sidebarExplorerToggle, title: "Show Explorer", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+E"]),
+        .init(action: .sidebarSearchToggle, title: "Show Search", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+F"]),
+        .init(action: .sidebarSourceControlToggle, title: "Show Source Control", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+G"]),
+        .init(action: .sidebarChecksToggle, title: "Show Checks", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: []),
+        .init(action: .sidebarPortsToggle, title: "Show Ports", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+I"]),
+        .init(action: .sidebarSleepingWorkspacesToggle, title: "Toggle Sleeping Workspaces", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: []),
+        .init(action: .sidebarFocusWorktreeList, title: "Focus worktree list", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+0"]),
+        .init(action: .floatingTerminalToggle, title: "Toggle Floating Terminal", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+A"]),
+        .init(action: .floatingWorkspaceMaximize, title: "Maximize Floating Workspace Panel", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+Shift+A"]),
+        .init(action: .floatingWorkspaceMinimize, title: "Minimize Floating Workspace Panel", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: []),
+        .init(action: .zoomIn, title: "Zoom In", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"]),
+        .init(action: .zoomOut, title: "Zoom Out", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+Minus", "Mod+NumpadSubtract"]),
+        .init(action: .zoomReset, title: "Reset Size", group: "Global", scope: .window, conflictGroup: nil, available: true, defaultBindings: ["Mod+0"]),
+        .init(action: .worktreeHistoryBack, title: "Worktree History Back", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+ArrowLeft"]),
+        .init(action: .worktreeHistoryForward, title: "Worktree History Forward", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+ArrowRight"]),
+        .init(action: .tabNewTerminal, title: "New terminal tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+T"]),
+        .init(action: .tabNewAgent, title: "New agent tab (default agent)", group: "Tabs", scope: .tabs, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+T"]),
+        .init(action: .tabNewBrowser, title: "New browser tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+B"]),
+        .init(action: .tabNewSimulator, title: "New mobile emulator tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+Shift+E"]),
+        .init(action: .tabNewMarkdown, title: "New markdown tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+M"]),
+        .init(action: .tabOpenMarkdown, title: "Open markdown tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+O"]),
+        .init(action: .tabClose, title: "Close active tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+W"]),
+        .init(action: .tabCloseAll, title: "Close all editor tabs", group: "Tabs", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+Alt+W"]),
+        .init(action: .tabRename, title: "Rename active tab", group: "Tabs", scope: .tabs, conflictGroup: "workspace-shell", available: true, defaultBindings: ["Mod+R"]),
+        .init(action: .tabReopenClosed, title: "Reopen closed tab", group: "Tabs", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+T"]),
+        .init(action: .tabNextSameType, title: "Next tab (same type)", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+Alt+BracketRight"]),
+        .init(action: .tabPreviousSameType, title: "Previous tab (same type)", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+Alt+BracketLeft"]),
+        .init(action: .tabNextAllTypes, title: "Next tab (all types)", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+BracketRight"]),
+        .init(action: .tabPreviousAllTypes, title: "Previous tab (all types)", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+BracketLeft"]),
+        .init(action: .tabPreviousRecent, title: "Previous recent tab", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Ctrl+Tab"]),
+        .init(action: .tabNextTerminal, title: "Next terminal tab", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Ctrl+PageDown"]),
+        .init(action: .tabPreviousTerminal, title: "Previous terminal tab", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Ctrl+PageUp"]),
+        .init(action: .tabSelectByIndex, title: "Select Tab 1–9", group: "Tab Navigation", scope: .tabs, conflictGroup: nil, available: true, defaultBindings: ["Ctrl+1"]),
+        .init(action: .tabOpenQuickCommandsMenu, title: "Toggle Quick Commands menu", group: "Quick Commands", scope: .tabs, conflictGroup: "global", available: true, defaultBindings: []),
+        .init(action: .browserFind, title: "Find in Browser", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+F"]),
+        .init(action: .browserBack, title: "Go Back in Browser", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+BracketLeft"]),
+        .init(action: .browserForward, title: "Go Forward in Browser", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+BracketRight"]),
+        .init(action: .browserReload, title: "Reload Browser Page", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+R"]),
+        .init(action: .browserHardReload, title: "Hard Reload Browser Page", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+R"]),
+        .init(action: .browserFocusAddressBar, title: "Focus Browser Address Bar", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+L"]),
+        .init(action: .browserGrabElement, title: "Grab Page Element", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+C"]),
+        .init(action: .browserAnnotateElement, title: "Annotate Page Element", group: "Browser", scope: .browser, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+C"]),
+        .init(action: .editorFind, title: "Find in editor", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Mod+F"]),
+        .init(action: .editorReplace, title: "Replace in editor", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+F"]),
+        .init(action: .editorSave, title: "Save File", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Mod+S"]),
+        .init(action: .editorMarkdownPreview, title: "Show Markdown Preview", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+V"]),
+        .init(action: .editorToggleWordWrap, title: "Toggle Word Wrap", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Alt+Z"]),
+        .init(action: .editorCopyContext, title: "Copy Context", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+C"]),
+        .init(action: .editorPreviousChange, title: "Go to Previous Change", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Shift+F7"]),
+        .init(action: .editorNextChange, title: "Go to Next Change", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["F7"]),
+        .init(action: .editorAddReviewNote, title: "Add Review Note", group: "Editors", scope: .editor, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+A"]),
+        .init(action: .sourceControlSendReviewNotes, title: "Send Review Notes to Agent", group: "Global", scope: .window, conflictGroup: "editor", available: false, defaultBindings: []),
+        .init(action: .fileExplorerUndo, title: "Undo file operation", group: "File Explorer", scope: .fileExplorer, conflictGroup: nil, available: false, defaultBindings: ["Mod+Z"]),
+        .init(action: .fileExplorerRedo, title: "Redo file operation", group: "File Explorer", scope: .fileExplorer, conflictGroup: nil, available: false, defaultBindings: ["Mod+Shift+Z"]),
+        .init(action: .fileExplorerCopyPath, title: "Copy file path", group: "File Explorer", scope: .fileExplorer, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+C"]),
+        .init(action: .fileExplorerCopyRelativePath, title: "Copy relative file path", group: "File Explorer", scope: .fileExplorer, conflictGroup: nil, available: false, defaultBindings: ["Mod+Alt+Shift+C"]),
+        .init(action: .fileExplorerDelete, title: "Delete file", group: "File Explorer", scope: .fileExplorer, conflictGroup: nil, available: false, defaultBindings: ["Mod+Backspace", "Delete"]),
+        .init(action: .settingsSearch, title: "Search Settings", group: "Settings", scope: .settings, conflictGroup: nil, available: false, defaultBindings: ["Mod+F"]),
+        .init(action: .terminalCopySelection, title: "Copy terminal selection", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+C"]),
+        .init(action: .terminalSelectAll, title: "Select all terminal text", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+A"]),
+        .init(action: .terminalPaste, title: "Paste into terminal", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+V"]),
+        .init(action: .terminalSearch, title: "Search active pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+F"]),
+        .init(action: .terminalClear, title: "Clear active pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+K"]),
+        .init(action: .terminalFocusNextPane, title: "Focus next pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+BracketRight"]),
+        .init(action: .terminalFocusPreviousPane, title: "Focus previous pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+BracketLeft"]),
+        .init(action: .terminalEqualizePaneSizes, title: "Equalize pane sizes", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: []),
+        .init(action: .terminalExpandPane, title: "Expand / collapse pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+Enter"]),
+        .init(action: .terminalSetTitle, title: "Set Title…", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: []),
+        .init(action: .chatFind, title: "Find in chat", group: "Chat", scope: .chat, conflictGroup: nil, available: false, defaultBindings: ["Mod+F"]),
+        .init(action: .sidebarChildWorkspacesToggle, title: "Toggle Child Workspaces", group: "Global", scope: .window, conflictGroup: nil, available: false, defaultBindings: []),
+        .init(action: .terminalClearPaneTitle, title: "Clear Pane Title", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: []),
+        .init(action: .terminalClosePane, title: "Close active pane", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+W"]),
+        .init(action: .terminalSplitRight, title: "Split terminal right", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+D"]),
+        .init(action: .terminalSplitDown, title: "Split terminal down", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: true, defaultBindings: ["Mod+Shift+D"]),
+        .init(action: .terminalSwitchInputSource, title: "Switch input source / language (native)", group: "Terminal Panes", scope: .terminal, conflictGroup: nil, available: false, defaultBindings: []),
+    ]
+
     public static let defaults: KeybindingRegistry = {
-        func chords(_ strings: [String]) -> [KeyChord] {
-            strings.compactMap { try? KeyChord.parse($0) }
-        }
-        let digits = (1...9).map(String.init)
-        let table: [KeybindingAction: [String]] = [
-            .tabNewTerminal: ["Mod+T"],
-            .tabClose: ["Mod+W"],
-            .tabCloseAll: ["Mod+Alt+W"],
-            .tabRename: ["Mod+R"],
-            .tabReopenClosed: ["Mod+Shift+T"],
-            .tabNextAllTypes: ["Mod+Shift+BracketRight"],
-            .tabPreviousAllTypes: ["Mod+Shift+BracketLeft"],
-            .tabNextSameType: ["Mod+Alt+BracketRight"],
-            .tabPreviousSameType: ["Mod+Alt+BracketLeft"],
-            .tabPreviousRecent: ["Ctrl+Tab"],
-            .tabNextTerminal: ["Ctrl+PageDown"],
-            .tabPreviousTerminal: ["Ctrl+PageUp"],
-            .tabSelectByIndex: digits.map { "Ctrl+\($0)" },
-            .terminalClosePane: ["Mod+W"],
-            .terminalSplitRight: ["Mod+D"],
-            .terminalSplitDown: ["Mod+Shift+D"],
-            .terminalFocusNextPane: ["Mod+BracketRight"],
-            .terminalFocusPreviousPane: ["Mod+BracketLeft"],
-            .terminalExpandPane: ["Mod+Shift+Enter"],
-            .terminalEqualizePaneSizes: [],
-            .terminalSetTitle: [],
-            .terminalClearPaneTitle: [],
-            .terminalCopySelection: ["Mod+C"],
-            .terminalPaste: ["Mod+V"],
-            .terminalSelectAll: ["Mod+A"],
-            .terminalSearch: ["Mod+F"],
-            .terminalClear: ["Mod+K"],
-            .workspaceSelectByIndex: digits.map { "Mod+\($0)" },
-            .worktreeNavigateUp: ["Mod+Shift+ArrowUp"],
-            .worktreeNavigateDown: ["Mod+Shift+ArrowDown"],
-            .worktreePalette: ["Mod+J"],
-            .worktreeHistoryBack: ["Mod+Alt+ArrowLeft"],
-            .worktreeHistoryForward: ["Mod+Alt+ArrowRight"],
-            .sidebarLeftToggle: ["Mod+B"],
-            .floatingTerminalToggle: ["Mod+Alt+A"],
-            .zoomIn: ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"],
-            .zoomOut: ["Mod+Minus", "Mod+NumpadSubtract"],
-            .zoomReset: ["Mod+0"],
-        ]
-        return KeybindingRegistry(bindings: table.mapValues(chords))
+        KeybindingRegistry(bindings: Dictionary(uniqueKeysWithValues: definitions.map { definition in
+            let chords = definition.defaultBindings.compactMap { try? KeyChord.parse($0) }
+            return (definition.action, expandedDigits(chords, for: definition.action))
+        }))
     }()
+
+    private static func expandedDigits(_ chords: [KeyChord], for action: KeybindingAction) -> [KeyChord] {
+        guard action == .tabSelectByIndex || action == .workspaceSelectByIndex else { return chords }
+        return chords.flatMap { chord in (1...9).map { digit in
+            var result = chord; result.key = String(digit); return result
+        }}
+    }
+
+    public static let nativeCutChord = KeyChord(key: "X", command: true)
+    public static let nativeNewWindowChord = KeyChord(key: "N", command: true)
+
+    public func digitIndex(for chord: KeyChord, action: KeybindingAction) -> Int? {
+        guard action == .tabSelectByIndex || action == .workspaceSelectByIndex,
+              chords(for: action).contains(chord), let digit = Int(chord.key), (1...9).contains(digit) else { return nil }
+        return digit - 1
+    }
+
+    /// Never take ordinary Ctrl-letter, Option-as-Meta, or typed text from a TUI.
+    public static func allowedInTerminal(_ chord: KeyChord) -> Bool {
+        chord.command || (chord.control && !chord.option && (chord.key == "Tab" || chord.key == "PageUp" || chord.key == "PageDown" || Int(chord.key).map { (1...9).contains($0) } == true))
+    }
+
+    public static func loading(from url: URL) -> (KeybindingRegistry, [KeybindingDiagnostic]) {
+        do { return loading(overridesJSON: try Data(contentsOf: url)) }
+        catch where (error as NSError).code == NSFileReadNoSuchFileError { return (.defaults, []) }
+        catch { return (.defaults, [.init(severity: .error, message: "Cannot read keybindings.json: \(error)")]) }
+    }
 
     /// Pairs allowed to share a chord on purpose (Cmd-W closes the pane, and the last pane closes the tab).
     private static let deliberatePairs: Set<Set<KeybindingAction>> = [[.tabClose, .terminalClosePane]]
@@ -280,7 +424,13 @@ public struct KeybindingRegistry: Sendable {
                     diagnostics.append(.init(severity: .error, message: "Invalid chord '\(text)' for '\(id)'; keeping the previous binding.", actionID: id))
                 }
             }
-            if !failed { table[action] = parsed }
+            if action == .tabSelectByIndex || action == .workspaceSelectByIndex {
+                if parsed.contains(where: { Int($0.key).map { !(1...9).contains($0) } ?? true }) {
+                    failed = true
+                    diagnostics.append(.init(severity: .error, message: "Index bindings must use a digit 1–9.", actionID: id))
+                }
+            }
+            if !failed { table[action] = expandedDigits(parsed, for: action).reduce(into: []) { if !$0.contains($1) { $0.append($1) } } }
         }
 
         let registry = KeybindingRegistry(bindings: table)
@@ -288,18 +438,24 @@ public struct KeybindingRegistry: Sendable {
         return (registry, diagnostics)
     }
 
-    /// Error diagnostics for two actions on one chord within the same scope.
+    /// All actions, including unavailable ones, participate in editing diagnostics.
     public func conflicts() -> [KeybindingDiagnostic] {
-        var result: [KeybindingDiagnostic] = []
-        for scope in [KeybindingScope.window, .terminal] {
-            var owners: [KeyChord: [KeybindingAction]] = [:]
-            for action in KeybindingAction.allCases where action.scope == scope {
-                for chord in Set(chords(for: action)) { owners[chord, default: []].append(action) }
+        var owners: [String: [KeyChord: [KeybindingAction]]] = [:]
+        for action in KeybindingAction.allCases {
+            let definition = action.definition
+            let buckets = Set([definition.scope.rawValue, definition.conflictGroup].compactMap { $0 })
+            for bucket in buckets {
+                for chord in Set(chords(for: action)) { owners[bucket, default: [:]][chord, default: []].append(action) }
             }
-            for (chord, actions) in owners.sorted(by: { $0.key.formatted < $1.key.formatted }) where actions.count > 1 {
+        }
+        var seen = Set<String>()
+        var result: [KeybindingDiagnostic] = []
+        for bucket in owners.keys.sorted() {
+            for (chord, actions) in owners[bucket]!.sorted(by: { $0.key.formatted < $1.key.formatted }) where actions.count > 1 {
                 if actions.count == 2, Self.deliberatePairs.contains(Set(actions)) { continue }
                 let names = actions.map(\.rawValue).joined(separator: ", ")
-                result.append(.init(severity: .error, message: "Chord \(chord.formatted) is bound to several actions in the \(scope.rawValue) scope: \(names).", actionID: actions[0].rawValue))
+                guard seen.insert(chord.formatted + names).inserted else { continue }
+                result.append(.init(severity: .error, message: "Chord \(chord.formatted) is bound to several actions in \(bucket): \(names).", actionID: actions[0].rawValue))
             }
         }
         return result

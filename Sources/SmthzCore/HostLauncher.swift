@@ -163,7 +163,8 @@ private final class HostLaunchWorker: @unchecked Sendable {
         }
         guard clock.now < deadline else { return .unreachable(reason: "Host probe deadline expired") }
         let child: LaunchChild
-        if let pending = launchedChild, pending.exitStatus == nil {
+        if let pending = launchedChild, pending.exitStatus == nil,
+           pending.identity?.isStillRunning() ?? true {
             // Socket absence alone cannot prove our previous launch is dead.
             // Reuse the same initializer instead of creating another process.
             child = pending
@@ -265,12 +266,16 @@ private final class HostLaunchWorker: @unchecked Sendable {
 /// their launcher. No deinit hook terminates the independently owned host.
 private final class LaunchChild: @unchecked Sendable {
     let pid: pid_t
+    // waitpid can reap the child before its waiter publishes status. The full
+    // identity lets a retry recognize that gap without trusting a recycled pid.
+    let identity: ProcessIdentity?
     private let lock = NSLock()
     private var status: Int32?
     var exitStatus: Int32? { lock.withLock { status } }
 
     init(pid: pid_t) {
         self.pid = pid
+        identity = ProcessIdentity.lookup(pid: pid)
         Thread.detachNewThread { [self] in
             var raw: Int32 = 0
             var result: pid_t

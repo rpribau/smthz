@@ -3,7 +3,7 @@ import Testing
 @testable import SmthzCore
 
 @Suite struct KeybindingsTests {
-    /// Hard-coded copy of the M3 subset of Orca 1.4.238 darwin defaults (docs/M3-PLAN.md 1.3).
+    /// Independent regression table for the original M3 subset of Orca 1.4.238 darwin defaults (docs/M3-PLAN.md 1.3).
     /// The index actions are Orca's representative chord expanded to digits 1-9.
     static let expected: [String: [String]] = [
         "tab.newTerminal": ["Mod+T"],
@@ -52,11 +52,65 @@ import Testing
 
     @Test func defaultsEqualOrcaDarwinTable() {
         let registry = KeybindingRegistry.defaults
-        #expect(KeybindingAction.allCases.count == Self.expected.count)
-        for action in KeybindingAction.allCases {
+        #expect(KeybindingAction.allCases.count == 91)
+        for action in KeybindingAction.allCases where Self.expected[action.rawValue] != nil {
             let actual = registry.chords(for: action).map(\.formatted)
             #expect(actual == Self.expected[action.rawValue], "\(action.rawValue)")
         }
+    }
+
+    @Test func completeRegistryMetadataAndAvailability() {
+        #expect(KeybindingRegistry.definitions.count == 91)
+        #expect(Set(KeybindingRegistry.definitions.map(\.action)).count == 91)
+        #expect(KeybindingRegistry.definitions.allSatisfy { !$0.title.isEmpty && !$0.group.isEmpty })
+        #expect(KeybindingAction.browserReload.scope == .browser)
+        #expect(!KeybindingAction.browserReload.available)
+        #expect(!KeybindingAction.editorSave.available)
+        #expect(KeybindingAction.tabReopenClosed.available)
+        #expect(KeybindingAction.appSettings.definition.conflictGroup == "menu")
+        #expect(KeybindingRegistry.defaults.chords(for: .appSettings).isEmpty)
+        #expect(KeybindingRegistry.defaults.chords(for: .workspaceCreate).map(\.formatted) == ["Mod+Shift+N"])
+    }
+
+    @Test func terminalPolicyLeavesTUIInputAlone() throws {
+        for text in ["Ctrl+C", "Ctrl+R", "Alt+B", "Shift+A", "A"] {
+            #expect(!KeybindingRegistry.allowedInTerminal(try KeyChord.parse(text)))
+        }
+        for text in ["Mod+D", "Ctrl+Tab", "Ctrl+9", "Ctrl+PageDown"] {
+            #expect(KeybindingRegistry.allowedInTerminal(try KeyChord.parse(text)))
+        }
+    }
+
+    @Test func digitOverridesExpandAndRejectNonDigits() throws {
+        let (registry, diagnostics) = KeybindingRegistry.loading(overridesJSON: try Self.json(["tab.selectByIndex": ["Mod+Alt+7"]]))
+        #expect(diagnostics.isEmpty)
+        #expect(registry.chords(for: .tabSelectByIndex).count == 9)
+        #expect(registry.digitIndex(for: try KeyChord.parse("Mod+Alt+9"), action: .tabSelectByIndex) == 8)
+        #expect(registry.digitIndex(for: try KeyChord.parse("Ctrl+9"), action: .tabSelectByIndex) == nil)
+        let (invalid, errors) = KeybindingRegistry.loading(overridesJSON: try Self.json(["tab.selectByIndex": ["Mod+A"]]))
+        #expect(!errors.isEmpty)
+        #expect(invalid.chords(for: .tabSelectByIndex) == KeybindingRegistry.defaults.chords(for: .tabSelectByIndex))
+    }
+
+    @Test func overrideFileReadsAndDiagnosesMalformedData() throws {
+        let dir = URL(fileURLWithPath: "/tmp/sz-key-" + UUID().uuidString.prefix(8))
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("keybindings.json")
+        #expect(KeybindingRegistry.loading(from: url).1.isEmpty)
+        try Self.json(["tab.newTerminal": ["Mod+Alt+N"]]).write(to: url)
+        let (loaded, errors) = KeybindingRegistry.loading(from: url)
+        #expect(errors.isEmpty)
+        #expect(loaded.chords(for: .tabNewTerminal).map(\.formatted) == ["Mod+Alt+N"])
+        try Data("broken".utf8).write(to: url)
+        #expect(KeybindingRegistry.loading(from: url).1.contains { $0.severity == .error })
+    }
+
+    @Test func explicitConflictGroupsCrossScopes() throws {
+        let (_, diagnostics) = KeybindingRegistry.loading(overridesJSON: try Self.json([
+            "workspace.rename": ["Mod+R"]
+        ]))
+        #expect(diagnostics.contains { $0.message.contains("workspace-shell") && $0.message.contains("tab.rename") })
     }
 
     @Test func parseFormatRoundTripForEveryDefault() throws {
@@ -102,7 +156,7 @@ import Testing
         let (registry, diagnostics) = KeybindingRegistry.loading(overridesJSON: try Self.json(["tab.rename": []]))
         #expect(diagnostics.isEmpty)
         #expect(registry.chords(for: .tabRename).isEmpty)
-        #expect(registry.action(for: try KeyChord.parse("Mod+R")) == nil)
+        #expect(registry.action(for: try KeyChord.parse("Mod+R"), scope: .tabs) == nil)
     }
 
     @Test func unknownActionIsWarning() throws {

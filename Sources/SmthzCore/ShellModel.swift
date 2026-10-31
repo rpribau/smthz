@@ -99,6 +99,10 @@ public struct TerminalTabRecord: Equatable, Codable, Sendable {
     }
 }
 public struct TabGroup: Equatable, Codable, Sendable {
+    // Optional metadata keeps pre-group state files decodable.
+    public var name: String?
+    public var color: TabColor?
+    public var collapsed: Bool?
     public var id: GroupID
     public var tabOrder: [TabID]
     public var activeTab: TabID?
@@ -228,6 +232,9 @@ public enum ShellCommand: Equatable, Sendable {
     case moveTabToSplit(TabID, side: PaneSide)
     case setGroupRatio(WorkspaceKey, path: [SplitBranch], ratio: Double)
     case activateGroup(GroupID)
+    case createGroup(TabID, name: String)
+    case renameGroup(GroupID, String?), setGroupColor(GroupID, TabColor?)
+    case setGroupCollapsed(GroupID, Bool), ungroup(GroupID)
     case reopenClosedTab(WorkspaceKey)
     case splitPane(TabID, pane: PaneID, side: PaneSide)
     case closePane(TabID, PaneID), focusPane(TabID, PaneID)

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 @testable import SmthzCore
 
@@ -30,6 +31,7 @@ private final class HostMonitorFixture {
 }
 
 private enum MonitorTestError: Error { case timeout }
+private final class MonitorBundleMarker: NSObject {}
 
 /// Bound stream waits so a broken polling loop or finish cannot hang the suite.
 private func monitorSnapshot(
@@ -52,6 +54,57 @@ private func monitorSnapshot(
 
 @Suite(.serialized)
 struct HostMonitorTests {
+    @Test func monitorRecoversAcrossRealHostRestartAndTokenRotation() async throws {
+        let directory = URL(fileURLWithPath: "/tmp/sz-mr-\(UUID().uuidString.prefix(8))")
+        let endpoint = HostEndpoint(stateDirectory: directory)
+        var binary = Bundle(for: MonitorBundleMarker.self).bundleURL.deletingLastPathComponent()
+        while binary.path != "/", !FileManager.default.isExecutableFile(atPath: binary.appendingPathComponent("smthzd").path) {
+            binary.deleteLastPathComponent()
+        }
+        let executable = binary.appendingPathComponent("smthzd")
+        try #require(FileManager.default.isExecutableFile(atPath: executable.path))
+        let launcher = HostLauncher(endpoint: endpoint, executable: executable)
+        let monitor = HostMonitor(socketPath: endpoint.socketPath, interval: .milliseconds(20))
+        let first = await launcher.ensureRunning(timeout: .seconds(20))
+        guard case .startedByUs(let original) = first else {
+            Issue.record("Could not launch host: \(first)"); return
+        }
+        defer {
+            if let client = try? HostClient(socketPath: endpoint.socketPath) {
+                _ = try? client.shutdown(); client.disconnect()
+            }
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let client = try HostClient(socketPath: endpoint.socketPath)
+        for _ in 0..<3 { _ = try client.createSession(executable: "/bin/cat") }
+        client.disconnect()
+        await monitor.start()
+        let before = try await monitorSnapshot(from: monitor.snapshots) { $0.sessions.count == 3 }
+        #expect(before?.state == .running(identity: original, version: ApplicationIdentity.version))
+        #expect(Darwin.kill(original.pid, SIGTERM) == 0)
+        _ = try await monitorSnapshot(from: monitor.snapshots) { $0.state == .notRunning }
+        let deadline = ContinuousClock.now + .seconds(10)
+        while original.isStillRunning(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        try #require(!original.isStillRunning())
+        // A fresh capability proves neither the token nor the handshake credential is cached.
+        try FileManager.default.removeItem(atPath: HostCapabilityToken.path(socketPath: endpoint.socketPath))
+        let restarted = await launcher.ensureRunning(timeout: .seconds(20))
+        guard case .startedByUs(let replacement) = restarted else {
+            await monitor.stop(); Issue.record("Could not restart host: \(restarted)"); return
+        }
+        let resumed = try await monitorSnapshot(from: monitor.snapshots) {
+            $0.state == .running(identity: replacement, version: ApplicationIdentity.version)
+        }
+        #expect(resumed?.sessions.isEmpty == true)
+        let nextClient = try HostClient(socketPath: endpoint.socketPath)
+        let session = try nextClient.createSession(executable: "/bin/cat")
+        nextClient.disconnect()
+        let adopted = try await monitorSnapshot(from: monitor.snapshots) { $0.sessions.contains { $0.id == session.id } }
+        #expect(adopted?.state == .running(identity: replacement, version: ApplicationIdentity.version))
+        await monitor.stop()
+        try await launcher.stop(expected: replacement, timeout: .seconds(20))
+    }
+
     @Test func missingHostProducesNotRunning() async throws {
         let fixture = try HostMonitorFixture()
         fixture.server.stop()

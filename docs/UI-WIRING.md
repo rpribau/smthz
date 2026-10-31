@@ -149,3 +149,77 @@ Focused acceptance evidence and full logs are in `/tmp/a1/`: bundled host execut
 Test results and concurrent scrollback-test changes are detailed in `/tmp/a1/report.md`; A1 changes no core or test files. These checks do not claim the full M3 verification matrix, a visual mismatch/throttle fixture, or a launchd service.
 
 Final A1 sheet checks additionally verified that Cancel preserved host PID 93500 and sleep PID 94944; confirmed Restart replaced the host with PID 95077 and ended that child; confirmed Stop left no host. See `/tmp/a1/menu-check.log`, `restart-cancel-final.png`, `restart-confirm-final.png`, and `stop-confirm-final.png`. Confirmation refreshes session inventory before presentation and explicitly warns when only a cached inventory is available. Baseline suite run passed 268 tests; subsequent concurrent scrollback changes grew it to 274 with a stale `HostLifecycleTests.swift:172` fixed-size assertion still failing, and one additional transient descriptor assertion in run 4. Full logs were delivered to the coordinator; three final green runs are still required after the concurrent test update.
+
+### WP-A3 groups (2026-10-31, shell lane)
+
+| Entry point | Behaviour | Verification |
+|---|---|---|
+| Tab context menu → New Group from Tab | Creates a model group; a sole tab names its current group | Core command tests; GUI pending (desktop locked) |
+| Group header / context menu | Collapse/expand, rename, colour, ungroup; state saved by ShellStateStore | Disk save/load test, backward-compatible metadata decode; GUI pending |
+| Drag tab onto group header / Move Tab Here menu | Moves across groups, collapses empty source, preserves pinned boundary | Core movement/pinned tests; drag GUI pending |
+| Reopen Closed Tab / Close All / Close Others / next and previous | Bounded core closed stack, fresh host session via effects; bulk close preserves pinned tabs and asks confirmation | Existing snapshot/cwd/title/colour tests; private GUI Cmd-T created 2 sessions; reopen/close GUI pending |
+
+A3 isolated build passed; initial full suites passed 278 tests twice. The third run picked up a parallel host test (279 total) and failed its executable discovery, reported to the coordinator. Group menus, screenshots and app relaunch restore were not proved: loginwindow became frontmost; coordinator authorized continuing A5 without those GUI checks.
+
+### WP-A5 keybinding registry (2026-10-31, shell lane)
+
+| Entry point | Behaviour | Verification |
+|---|---|---|
+| File/View/Tabs/Terminal/Other Actions menus | All 91 reference actions retain ids, titles, groups, scopes, default chords and explicit conflict groups; 43 actions wired, 48 unavailable and disabled | Build + metadata/default/scope/conflict tests; GUI pending |
+| `<state-dir>/keybindings.json` | JSON object from action id to chord string array; `[]` unbinds; reload on app activation; malformed records keep the previous/default action binding; malformed JSON falls back to defaults; diagnostics log and toast | File-read/parse/unbind/conflict tests |
+| Tab/pane event monitors and numeric selectors | Effective registry handles each alternate chord, Ctrl-Tab and 1–9; digit override expands 1–9; ordinary Ctrl-letters and Option-as-Meta are left to the TUI | Pure policy/digit tests; GUI TUI check pending |
+| Landing and create/context menus | Keycaps and menu equivalents read effective bindings; unavailable workspace-navigation hints hidden | Build; GUI pending |
+| Native edit fields | Standard copy/paste/select-all bindings retained in native fields; effective terminal bindings used in terminal menus | Build; GUI pending |
+| D7 | Cmd-N reserved for New Window (disabled until A4), Cmd-Shift-N composer, Cmd-T shell, Cmd-=/-/0 change terminal font size | Core defaults checked; GUI pending |
+| View → Force Reload | Native equivalent restarts host observation/reconciliation; terminal sessions stay host-owned | Build; GUI pending |
+| Help → Check for Updates / Report Crash | Explicit unavailable alerts until service backends exist | Build; GUI pending |
+
+Only the two pre-A5 Cmd-T shell creations were seen in the private app before the desktop locked. **Every A5 wired action below remains unexercised in the real app**, including overrides and menu enablement; coordinator explicitly accepted this verification gap for later manual testing:
+
+- `worktree.quickOpen`
+- `app.settings`
+- `app.forceReload`
+- `worktree.palette`
+- `workspace.create`
+- `view.tasks`
+- `sidebar.left.toggle`
+- `sidebar.right.toggle`
+- `sidebar.explorer.toggle`
+- `sidebar.sourceControl.toggle`
+- `sidebar.checks.toggle`
+- `sidebar.ports.toggle`
+- `zoom.in`
+- `zoom.out`
+- `zoom.reset`
+- `tab.newTerminal`
+- `tab.close`
+- `tab.closeAll`
+- `tab.rename`
+- `tab.reopenClosed`
+- `tab.nextSameType`
+- `tab.previousSameType`
+- `tab.nextAllTypes`
+- `tab.previousAllTypes`
+- `tab.previousRecent`
+- `tab.nextTerminal`
+- `tab.previousTerminal`
+- `tab.selectByIndex`
+- `tab.openQuickCommandsMenu`
+- `terminal.copySelection`
+- `terminal.selectAll`
+- `terminal.paste`
+- `terminal.search`
+- `terminal.clear`
+- `terminal.focusNextPane`
+- `terminal.focusPreviousPane`
+- `terminal.equalizePaneSizes`
+- `terminal.expandPane`
+- `terminal.setTitle`
+- `terminal.clearPaneTitle`
+- `terminal.closePane`
+- `terminal.splitRight`
+- `terminal.splitDown`
+
+`TerminalSessionView.handleShortcut` received the coordinator-authorized small change from hard-coded Cmd-F/Cmd-K checks to registry matches; no host/streaming code was changed by this lane. `LayoutSplitView` changes are confined to its shortcut helper. The registry retains unavailable backend actions for future implementation rather than dispatching placeholder shortcuts.
+
+Final shell-lane verification: build and `scripts/package-app.sh debug` passed with `/tmp/smthz-shelllane` as the only scratch path. Two of three final full-suite runs passed **291 tests** (17.845 s, 16.924 s); the third failed only `SessionStreamTests.disconnectAndReconnectResumeFromConsumedCursor` (`Caught error: .closed`, 0.784 s), owned by the parallel host/stream lane. The coordinator copied the full failure logs and explicitly authorized finishing this lane without waiting for that fix; the required three consecutive full-suite passes are therefore **not achieved**. Eight shell-lane tests were added (`@Test` on each); all shell/group/keybinding tests passed in the final runs. Package.swift, .gitignore and protected directories were untouched by this lane; no git write commands were used. Final app was packaged but not launched while the desktop was locked; private app/host were stopped and own scratch/state/logs removed.

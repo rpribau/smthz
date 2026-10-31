@@ -415,3 +415,47 @@ private let shellTabTestChildIdentity = ProcessIdentity(pid: 222, startSeconds: 
     #expect(repaired.lastVisited[.floating] == nil)
     #expect(repaired.repaired() == repaired)
 }
+
+@Test func shellGroupMetadataPersistsAndUngroupPreservesSessions() throws {
+    var h = TabHarness()
+    let a = try h.create(), b = try h.create()
+    try h.apply(.createGroup(b, name: "Build"))
+    let group = h.group
+    try h.apply(.renameGroup(group, " Review "))
+    try h.apply(.setGroupColor(group, .blue))
+    try h.apply(.setGroupCollapsed(group, true))
+    let directory = URL(fileURLWithPath: "/tmp/sz-gr-" + UUID().uuidString.prefix(8))
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("shell-state.json")
+    try ShellStateStore.save(h.state, to: url)
+    let (restored, report) = ShellStateStore.load(from: url)
+    #expect(report.salvaged.isEmpty && report.backupPath == nil)
+    #expect(restored.workspaces[.home]?.groups[group]?.name == "Review")
+    #expect(restored.workspaces[.home]?.groups[group]?.color == .blue)
+    #expect(restored.workspaces[.home]?.groups[group]?.collapsed == true)
+    let effects = try h.apply(.ungroup(group))
+    #expect(h.workspace.groups.count == 1)
+    #expect(Set(h.order) == Set([a, b]))
+    #expect(effects.stopSessions.isEmpty && effects.startPanes.isEmpty)
+}
+@Test func shellPinnedBoundarySurvivesMoveAndCreate() throws {
+    var h = TabHarness()
+    let a = try h.create(), b = try h.create(), c = try h.create()
+    try h.apply(.setPinned(c, true))
+    #expect(h.order == [c, a, b])
+    try h.apply(.moveTab(a, toGroup: h.group, index: 0))
+    #expect(h.order == [c, a, b])
+    try h.apply(.moveTab(c, toGroup: h.group, index: 99))
+    #expect(h.order.first == c)
+    try h.apply(.activateTab(c))
+    let d = try h.create()
+    #expect(h.order == [c, d, a, b])
+}
+@Test func shellOldGroupMetadataDecodes() throws {
+    let id = GroupID(rawValue: "old")
+    let data = try JSONEncoder().encode(TabGroup(id: id))
+    var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    json.removeValue(forKey: "name"); json.removeValue(forKey: "color"); json.removeValue(forKey: "collapsed")
+    let group = try JSONDecoder().decode(TabGroup.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(group.name == nil && group.color == nil && group.collapsed == nil)
+}

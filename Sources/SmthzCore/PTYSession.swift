@@ -231,6 +231,9 @@ public final class PTYSession: @unchecked Sendable {
         let condition = NSCondition()
         let writer = NSLock()
         let delivery = DispatchQueue(label: "SmthzCore.PTYSession.output")
+        // Bound the delivery backlog too: a fast PTY must not queue unlimited
+        // Data while its shared scrollback writer is busy.
+        let deliverySlots = DispatchSemaphore(value: 16)
         let pid: Int32
         var fd: Int32
         var result: PTYExit?
@@ -257,7 +260,11 @@ public final class PTYSession: @unchecked Sendable {
         }
 
         func emit(_ data: Data) {
-            if let handler { delivery.async { handler(data) } }
+            if let handler {
+                deliverySlots.wait()
+                let slots = deliverySlots
+                delivery.async { handler(data); slots.signal() }
+            }
             else {
                 // Keep the earliest output up to the documented 1 MiB limit.
                 buffer.append(data.prefix(max(0, 1_048_576 - buffer.count)))

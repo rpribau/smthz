@@ -18,19 +18,17 @@ struct LandingView: View {
     var createLabel = "Create workspace"
     var bindings: KeybindingRegistry = .defaults
     var shortcuts: [Shortcut]? = nil
-    /// Workspace creation is a shell action outside the current core registry.
-    var createWorkspaceChord: KeyChord? = KeyChord(key: "N", command: true)
     var preflightIssues: [String] = []
 
     private var displayedShortcuts: [Shortcut] {
         if let shortcuts { return shortcuts }
         var rows: [Shortcut] = []
-        if let chord = createWorkspaceChord {
+        if let chord = bindings.chords(for: .workspaceCreate).first {
             rows.append(.init(title: "Create workspace", keys: KeyCapView.symbols(for: chord)))
         }
         for (title, action) in [("Move up workspace", KeybindingAction.worktreeNavigateUp),
                                 ("Move down workspace", KeybindingAction.worktreeNavigateDown)] {
-            if let chord = bindings.chords(for: action).first {
+            if action.available, let chord = bindings.chords(for: action).first {
                 rows.append(.init(title: title, keys: KeyCapView.symbols(for: chord)))
             }
         }

@@ -3,9 +3,9 @@ import SwiftUI
 import SwiftTerm
 import SmthzCore
 
-/// One persistent host connection per terminal. Reads and writes are serialized by the actor;
-/// synchronous RPC never runs on the UI actor. A failed call drops the connection and the next
-/// call reconnects, so a host restart only costs a retry.
+/// Serializes control RPC away from the UI actor. Output subscriptions own
+/// separate sockets, so an idle stream never blocks keyboard input or resize.
+/// Failed control calls drop their connection and reconnect on the next call.
 private actor TerminalTransport {
     private let socketPath: String
     private var client: HostClient?
@@ -28,8 +28,8 @@ private actor TerminalTransport {
         }
     }
 
-    func read(id: String, from cursor: UInt64) throws -> HostReadResult {
-        try perform { try $0.read(id: id, from: cursor, maxBytes: 65_536) }
+    func subscribe(id: String, from cursor: UInt64) throws -> AsyncThrowingStream<HostReadResult, any Error> {
+        try perform { $0.subscribe(id: id, fromCursor: cursor) }
     }
 
     func write(id: String, data: Data) throws { try perform { _ = try $0.write(id: id, data: data) } }
@@ -91,12 +91,9 @@ private final class FocusingTerminalView: TerminalView {
     }
 
     private func handleShortcut(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else { return false }
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "f": showFind?(); return true
-        case "k": clearScreen?(); return true
-        default: return false
-        }
+        if SmthzKeybindings.shared.matches(event, action: .terminalSearch) { showFind?(); return true }
+        if SmthzKeybindings.shared.matches(event, action: .terminalClear) { clearScreen?(); return true }
+        return false
     }
 
     override func performTextFinderAction(_ sender: Any?) { showFind?() }
@@ -205,7 +202,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
         }
     }
 
-    /// Pause polling only. The emulator, command stream and absolute cursor survive.
+    /// Pause the subscription only. The emulator, command stream and absolute cursor survive.
     func pause() { outputTask?.cancel(); outputTask = nil; resumed = false }
     func resume() {
         guard !resumed, exit == nil else { return }
@@ -216,28 +213,31 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
             while !Task.isCancelled {
                 do {
                     guard let cursor = self?.cursor else { return }
-                    let result = try await transport.read(id: id, from: cursor)
-                    guard !Task.isCancelled, let self else { return }
-                    self.cursor = result.next
-                    if result.truncated {
-                        // The host dropped output older than its window: what we drew is stale.
-                        // Start the emulator over and continue from the returned cursor.
-                        self.view.resetToInitialState()
+                    let stream = try await transport.subscribe(id: id, from: cursor)
+                    for try await result in stream {
+                        guard !Task.isCancelled, let self else { return }
+                        if result.truncated {
+                            // The host dropped output older than its window: what we drew is stale.
+                            // Start the emulator over and continue from the returned cursor.
+                            self.view.resetToInitialState()
+                        }
+                        if !result.data.isEmpty {
+                            self.outputReceived = true
+                            self.view.feed(byteArray: ArraySlice(result.data))
+                        }
+                        // Advance only after the emulator consumed this frame. A failed
+                        // bounded stream resubscribes here without gaps or duplicates.
+                        self.cursor = result.next
+                        if let exit = result.exit {
+                            self.exit = exit
+                            self.onExit(ProcessExitFacts(code: exit.code, signal: exit.signal,
+                                spawnedFresh: self.spawnedFresh, restored: !self.spawnedFresh,
+                                inputWritten: self.inputWritten, outputReceived: self.outputReceived,
+                                tabHadPaneAtConnect: true))
+                            return
+                        }
                     }
-                    if !result.data.isEmpty {
-                        self.outputReceived = true
-                        self.view.feed(byteArray: ArraySlice(result.data))
-                        continue // drain a backlog without sleeping
-                    }
-                    if let exit = result.exit {
-                        self.exit = exit
-                        self.onExit(ProcessExitFacts(code: exit.code, signal: exit.signal,
-                            spawnedFresh: self.spawnedFresh, restored: !self.spawnedFresh,
-                            inputWritten: self.inputWritten, outputReceived: self.outputReceived,
-                            tabHadPaneAtConnect: true))
-                        return
-                    }
-                    try await Task.sleep(for: .milliseconds(25))
+                    try await Task.sleep(for: .milliseconds(100))
                 } catch is CancellationError {
                     return
                 } catch {

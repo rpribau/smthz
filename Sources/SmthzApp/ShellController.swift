@@ -136,8 +136,32 @@ final class ShellController {
         visibleIDs.map { id in ShellTabItem(id: id, title: title(id), colour: tab(id)?.color.map(Self.color),
             pinned: pinned.contains(id), active: selectedSessionID == id,
             expanded: tab(id)?.expandedPane != nil, cwd: directory(id),
+            groupID: workspace.groups.values.first { $0.tabOrder.contains(tab(id)!.id) }?.id.rawValue,
             hasSplitGroups: (workspace.groupLayout?.leaves.count ?? 0) > 1) }
     }
+    var tabGroups: [ShellTabGroupItem] {
+        (workspace.groupLayout?.leaves ?? []).compactMap { id in
+            guard let group = workspace.groups[id], workspace.groups.count > 1 || group.name != nil else { return nil }
+            return ShellTabGroupItem(id: id.rawValue, title: group.name ?? "Group", color: group.color.map(Self.color), collapsed: group.collapsed == true)
+        }
+    }
+    func groupAction(_ action: ShellGroupAction) {
+        switch action {
+        case .create(let session): if let tab = tab(session) { _ = apply(.createGroup(tab.id, name: "Group")) }
+        case .rename(let id, let name): _ = apply(.renameGroup(GroupID(rawValue: id), name))
+        case .color(let id, let color): _ = apply(.setGroupColor(GroupID(rawValue: id), color))
+        case .collapse(let id, let collapsed): _ = apply(.setGroupCollapsed(GroupID(rawValue: id), collapsed))
+        case .ungroup(let id): _ = apply(.ungroup(GroupID(rawValue: id)))
+        case .move(let session, let id):
+            if let tab = tab(session), let group = workspace.groups[GroupID(rawValue: id)] {
+                _ = apply(.moveTab(tab.id, toGroup: group.id, index: group.tabOrder.count))
+            }
+        }
+        flush()
+    }
+    func reopenClosedTab() async { await execute(apply(.reopenClosedTab(.home))) }
+    func cycleTab(forward: Bool) { _ = apply(forward ? .nextTab(.home) : .previousTab(.home)) }
+
     func directory(_ id: String) -> String? { directories[id] ?? sessions.first { $0.id == id }?.cwd ?? tab(id)?.startupCwd }
     var rootURL: URL? { selectedSessionID.flatMap { directory($0) }.map { URL(fileURLWithPath: $0) } }
     func rename(_ id: String, title: String?) { if let tab = tab(id) { _ = apply(.renameTab(tab.id, title)) } }

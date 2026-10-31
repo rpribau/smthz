@@ -65,6 +65,10 @@ public final class HostService: @unchecked Sendable {
     private let credential = HostCapabilityToken.random()
     private let stateLock = NSLock()
     private var active: [UUID: Control] = [:]
+    private var subscribers = 0
+    public var activeSubscriberCount: Int { stateLock.withLock { subscribers } }
+    public static let maximumSubscribers = 64
+    public static let streamChunkBytes = 65_536
     public static let maximumPendingRequests = 64
     public static let maximumRequestBytes = 700_000
     public static let maximumTimeoutMilliseconds = 30_000
@@ -108,6 +112,53 @@ public final class HostService: @unchecked Sendable {
         self.hostIdentity = hostIdentity
     }
 
+    /// Consumes a dedicated connection. Socket writes provide back-pressure;
+    /// subscriber state is only a cursor, never an unbounded queue of PTY bytes.
+    public func stream(_ payload: Data, send: (Data) throws -> Void, cancelled: () -> Bool) -> Bool {
+        guard let request = try? JSONDecoder().decode(RPCEnvelope.self, from: payload),
+              request.method == "session.subscribe" else { return false }
+        let admitted = stateLock.withLock {
+            guard subscribers < Self.maximumSubscribers else { return false }
+            subscribers += 1
+            return true
+        }
+        guard admitted else {
+            try? send(response(to: request, body: Body(ok: false, error: "limitExceeded")))
+            return true
+        }
+        defer { stateLock.withLock { subscribers -= 1 } }
+        do {
+            let acknowledgement = handle(payload)
+            try send(acknowledgement)
+            let envelope = try JSONDecoder().decode(RPCEnvelope.self, from: acknowledgement)
+            struct Status: Decodable { let ok: Bool }
+            guard try JSONDecoder().decode(Status.self, from: envelope.payload).ok else { return true }
+            let params = try JSONDecoder().decode(SubscribeParams.self, from: request.payload)
+            var cursor = params.fromCursor
+            while !cancelled() {
+                guard try sessionManager.waitForOutput(id: params.id, from: cursor, cancelled: cancelled) else { break }
+                let result = try sessionManager.read(id: params.id, from: cursor, maxBytes: Self.streamChunkBytes)
+                // An exit is delivered separately after every final output byte.
+                var exit: ExitBody?
+                if result.data.isEmpty {
+                    switch result.exit {
+                    case .exited(let code): exit = ExitBody(code: code)
+                    case .signaled(let signal): exit = ExitBody(signal: signal)
+                    case nil: break
+                    }
+                }
+                try send(response(to: request, body: Body(ok: true,
+                    data_base64: result.data.base64EncodedString(), next: result.nextOffset,
+                    truncated: result.truncated, exit: exit)))
+                cursor = result.nextOffset
+                if exit != nil { break }
+            }
+        } catch let error as SessionError {
+            try? send(response(to: request, body: Body(ok: false, error: error.rawValue)))
+        } catch { /* Disconnect or deadline: a new subscriber resumes from its own cursor. */ }
+        return true
+    }
+
     public func handle(_ payload: Data) -> Data {
         guard let request = try? JSONDecoder().decode(RPCEnvelope.self, from: payload) else {
             return response(to: RPCEnvelope(version: 1, requestID: "", method: "", payload: Data()),
@@ -138,6 +189,15 @@ public final class HostService: @unchecked Sendable {
         let timeout = request.timeoutMilliseconds ?? 5_000
         guard (1...Self.maximumTimeoutMilliseconds).contains(timeout) else {
             return response(to: request, body: Body(ok: false, error: "limitExceeded"))
+        }
+        if request.method == "session.subscribe" {
+            do {
+                let params = try JSONDecoder().decode(SubscribeParams.self, from: request.payload)
+                _ = try sessionManager.read(id: params.id, from: params.fromCursor, maxBytes: 1)
+                return response(to: request, body: Body(ok: true))
+            } catch {
+                return response(to: request, body: Body(ok: false, error: (error as? SessionError)?.rawValue ?? "badRequest"))
+            }
         }
         if request.method == "request.cancel" {
             struct Cancel: Decodable { let requestID: String }
@@ -291,6 +351,7 @@ public final class HostService: @unchecked Sendable {
         var rows: Int?
         var cols: Int?
     }
+    private struct SubscribeParams: Decodable { let id: String; let fromCursor: UInt64 }
     private struct IDParams: Decodable { let id: String }
     private struct WriteParams: Decodable { let id: String; let data_base64: String }
     private struct ResizeParams: Decodable { let id: String; let rows: Int; let cols: Int }

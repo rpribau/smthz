@@ -83,6 +83,8 @@ private func readChunk(from fd: Int32) throws -> Data {
 }
 
 public final class UnixSocketServer: @unchecked Sendable {
+    /// A handler returns true after consuming a dedicated streaming connection.
+    public typealias StreamHandler = @Sendable (Data, (Data) throws -> Void, () -> Bool) -> Bool
     // The state outlives the public server only until its background loops exit.
     private final class State: @unchecked Sendable {
         let lock = NSLock()
@@ -92,15 +94,17 @@ public final class UnixSocketServer: @unchecked Sendable {
         let inode: ino_t
         let handler: @Sendable (Data) -> Data
         let afterResponse: (@Sendable (Data) -> Void)?
+        let streamHandler: StreamHandler?
 
         init(listener: Int32, path: String, inode: ino_t,
              handler: @escaping @Sendable (Data) -> Data,
-             afterResponse: (@Sendable (Data) -> Void)?) {
+             afterResponse: (@Sendable (Data) -> Void)?, streamHandler: StreamHandler?) {
             self.listener = listener
             self.path = path
             self.inode = inode
             self.handler = handler
             self.afterResponse = afterResponse
+            self.streamHandler = streamHandler
         }
 
         func acceptConnections() {
@@ -149,6 +153,21 @@ public final class UnixSocketServer: @unchecked Sendable {
                 while true {
                     decoder.append(try readChunk(from: fd))
                     while let payload = try decoder.nextFrame() {
+                        if let streamHandler {
+                            let handled = streamHandler(payload, { data in
+                                // A slow peer cannot retain a server thread indefinitely.
+                                var timeout = timeval(tv_sec: 2, tv_usec: 0)
+                                guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout,
+                                    socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 else { throw UnixSocketError.closed }
+                                try writeFrame(RPCFrameCodec.encode(data), to: fd)
+                            }, {
+                                if self.lock.withLock({ self.listener < 0 }) { return true }
+                                var byte: UInt8 = 0
+                                let count = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
+                                return count == 0 || (count < 0 && errno != EAGAIN && errno != EINTR)
+                            })
+                            if handled { return }
+                        }
                         let response = handler(payload)
                         try writeFrame(RPCFrameCodec.encode(response), to: fd)
                         afterResponse?(response)
@@ -176,7 +195,8 @@ public final class UnixSocketServer: @unchecked Sendable {
     private let state: State
 
     public init(path: String, handler: @escaping @Sendable (Data) -> Data,
-                afterResponse: (@Sendable (Data) -> Void)? = nil) throws {
+                afterResponse: (@Sendable (Data) -> Void)? = nil,
+                streamHandler: StreamHandler? = nil) throws {
         var address = try socketAddress(path)
         let parent = (path as NSString).deletingLastPathComponent
         if !parent.isEmpty {
@@ -223,7 +243,8 @@ public final class UnixSocketServer: @unchecked Sendable {
             unlink(path)
             throw UnixSocketError.listenFailed(code)
         }
-        state = State(listener: fd, path: path, inode: info.st_ino, handler: handler, afterResponse: afterResponse)
+        state = State(listener: fd, path: path, inode: info.st_ino, handler: handler,
+                      afterResponse: afterResponse, streamHandler: streamHandler)
         let backgroundState = state
         // Dedicated threads: these loops block, and a starved GCD pool would stall peers.
         Thread.detachNewThread { backgroundState.acceptConnections() }
@@ -235,6 +256,7 @@ public final class UnixSocketServer: @unchecked Sendable {
 
 public final class UnixSocketClient {
     private var fd: Int32
+    private let lifecycleLock = NSLock()
     private var decoder = RPCFrameDecoder()
 
     public init(path: String) throws {
@@ -280,8 +302,27 @@ public final class UnixSocketClient {
         }
     }
 
+    /// Owner-thread receive after a subscription acknowledgement. No idle
+    /// timeout; interrupt() wakes it promptly when its consumer goes away.
+    public func receive() throws -> Data {
+        guard fd >= 0 else { throw UnixSocketError.closed }
+        var timeout = timeval(tv_sec: 0, tv_usec: 0)
+        guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+            socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 else { throw UnixSocketError.closed }
+        while true {
+            if let response = try decoder.nextFrame() { return response }
+            decoder.append(try readChunk(from: fd))
+        }
+    }
+
+    /// Safe from a cancellation thread: shuts down but never closes/recycles
+    /// the descriptor while the owner is inside a blocking receive.
+    public func interrupt() {
+        lifecycleLock.withLock { if fd >= 0 { Darwin.shutdown(fd, SHUT_RDWR) } }
+    }
+
     public func close() {
-        if fd >= 0 { Darwin.close(fd); fd = -1 }
+        lifecycleLock.withLock { if fd >= 0 { Darwin.close(fd); fd = -1 } }
     }
 
     deinit { close() }

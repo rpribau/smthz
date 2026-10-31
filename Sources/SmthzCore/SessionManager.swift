@@ -70,11 +70,12 @@ public final class SessionManager: @unchecked Sendable {
     private final class Record: @unchecked Sendable {
         let child: PTYSession
         let info: SessionInfo
-        let lock = NSLock()
+        let lock = NSCondition()
         var output = Data()
         var end: UInt64 = 0
         let disk: Scrollback?
         var scrollbackFailed = false
+        var outputFinished = false
         var closeJournaled = false // guarded by the manager lock
         init(child: PTYSession, id: String, disk: Scrollback?, executable: String,
              arguments: [String], cwd: String, createdAt: Double) {
@@ -91,6 +92,8 @@ public final class SessionManager: @unchecked Sendable {
             defer { lock.unlock() }
             do { try disk?.finish() }
             catch { scrollbackFailed = true }
+            outputFinished = true
+            lock.broadcast()
         }
         func append(_ bytes: Data, limit: Int) {
             lock.lock()
@@ -102,6 +105,7 @@ public final class SessionManager: @unchecked Sendable {
             end += UInt64(bytes.count)
             output.append(bytes)
             if output.count > limit { output = Data(output.suffix(limit)) }
+            lock.broadcast()
         }
     }
 
@@ -186,6 +190,20 @@ public final class SessionManager: @unchecked Sendable {
         let count = min(maxBytes, Self.maximumTransferBytes, Int(record.end - cursor))
         let data = Data(record.output.dropFirst(Int(cursor - start)).prefix(count))
         return (data, cursor + UInt64(count), offset < start, exit)
+    }
+
+    /// Waits on output/exit notifications, with a bounded cancellation check.
+    /// No per-subscriber output copy is retained: the socket writer reads directly
+    /// from the shared bounded log using its own absolute cursor.
+    func waitForOutput(id: String, from cursor: UInt64, cancelled: () -> Bool) throws -> Bool {
+        let record = try lookup(id)
+        record.lock.lock()
+        defer { record.lock.unlock() }
+        while record.end <= cursor && !record.scrollbackFailed && !record.outputFinished {
+            if cancelled() { return false }
+            _ = record.lock.wait(until: Date(timeIntervalSinceNow: 0.25))
+        }
+        return !cancelled()
     }
 
     /// Replays a retained session without restoring a process or journal state.

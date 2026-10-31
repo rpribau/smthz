@@ -138,22 +138,13 @@ private struct PaneShortcutMonitor: NSViewRepresentable {
     func updateNSView(_ view: Monitor, context: Context) {
         view.perform = { event in
             guard let tab = model.activeTab else { return false }
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let key = event.charactersIgnoringModifiers?.lowercased()
-            if flags == .command {
-                switch key {
-                case "d": Task { await model.split(tab.id, pane: tab.activePane, side: .right) }
-                case "[": model.paneCommand(.focusPreviousPane(tab.id))
-                case "]": model.paneCommand(.focusNextPane(tab.id))
-                case "w": close(tab.activePane, tab.id)
-                default: return false
-                }
-                return true
-            }
-            if flags == [.command, .shift] {
-                if key == "d" { Task { await model.split(tab.id, pane: tab.activePane, side: .bottom) }; return true }
-                if event.keyCode == 36 { model.paneCommand(.toggleExpandPane(tab.id, tab.activePane)); return true }
-            }
+            let bindings = SmthzKeybindings.shared
+            if bindings.matches(event, action: .terminalSplitRight) { Task { await model.split(tab.id, pane: tab.activePane, side: .right) }; return true }
+            if bindings.matches(event, action: .terminalSplitDown) { Task { await model.split(tab.id, pane: tab.activePane, side: .bottom) }; return true }
+            if bindings.matches(event, action: .terminalFocusPreviousPane) { model.paneCommand(.focusPreviousPane(tab.id)); return true }
+            if bindings.matches(event, action: .terminalFocusNextPane) { model.paneCommand(.focusNextPane(tab.id)); return true }
+            if bindings.matches(event, action: .terminalClosePane) { close(tab.activePane, tab.id); return true }
+            if bindings.matches(event, action: .terminalExpandPane) { model.paneCommand(.toggleExpandPane(tab.id, tab.activePane)); return true }
             return false
         }
     }

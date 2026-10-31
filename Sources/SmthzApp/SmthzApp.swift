@@ -1,15 +1,18 @@
 import AppKit
 import SwiftUI
 import Observation
+import SmthzCore
 
 /// UI-29 injects this value into ShellView's environment. ShellLayout publishes it
 /// to the active scene so menus always address the focused window, including a terminal.
 struct SmthzShellActions: Sendable {
     enum Action: Sendable {
+        case keybinding(KeybindingAction, index: Int?)
         case newTerminal, closeTab, renameTab, clearTerminal, recentTab
         case selectTab(Int), jumpPalette, quickOpen, settings, keyboardShortcuts
         case showExplorer, showSourceControl, showPorts, explore, gettingStarted
     }
+    var canPerform: @MainActor @Sendable (KeybindingAction) -> Bool = { $0.available }
     var perform: @MainActor @Sendable (Action) -> Void = { _ in }
 }
 
@@ -82,22 +85,26 @@ struct SmthzShellCommands: Commands {
     @AppStorage("sidebar.showMobileButton") private var showMobile = true
     @AppStorage("shell.uiZoom") private var zoom = 1.0
 
+    private var bindings: SmthzKeybindings { .shared }
     var body: some Commands {
-        CommandGroup(replacing: .appSettings) {
-            action("Settings…", .settings, key: ",")
-        }
+        CommandGroup(replacing: .appSettings) { action(.appSettings) }
         CommandGroup(replacing: .newItem) {
-            action("New Terminal", .newTerminal, key: "t")
+            action(.tabNewTerminal)
+            action(.workspaceCreate)
+            Button("New Window") {}.keyboardShortcut(bindings.shortcut(KeybindingRegistry.nativeNewWindowChord)).disabled(true)
+        }
+        CommandGroup(replacing: .pasteboard) {
+            Button("Cut") { NSApp.sendAction(Selector("cut:"), to: NSApp.keyWindow?.firstResponder, from: nil) }
+                .keyboardShortcut(bindings.shortcut(KeybindingRegistry.nativeCutChord)).disabled(!bindings.editingNativeText)
+            editingAction(.terminalCopySelection, selector: "copy:")
+            editingAction(.terminalPaste, selector: "paste:")
+            editingAction(.terminalSelectAll, selector: "selectAll:")
         }
         CommandGroup(replacing: .saveItem) {
-            action("Close Tab", .closeTab, key: "w")
-            action("Rename Tab…", .renameTab, key: "r")
+            action(.tabClose); action(.tabCloseAll); action(.tabReopenClosed); action(.tabRename)
         }
         CommandGroup(replacing: .sidebar) {
-            Button("Toggle Left Sidebar") { sidebarOpen.toggle() }
-                .keyboardShortcut("b", modifiers: .command)
-            Button("Toggle Right Sidebar") { rightSidebarOpen.toggle() }
-                .keyboardShortcut("l", modifiers: .command)
+            action(.sidebarLeftToggle); action(.sidebarRightToggle)
             Toggle("Show Status Bar", isOn: $showStatusBar)
             Menu("Appearance") {
                 Toggle("Show Tasks Button", isOn: $showTasks)
@@ -106,23 +113,32 @@ struct SmthzShellCommands: Commands {
                 Toggle("Show Titlebar App Name", isOn: $showAppName)
             }
             Divider()
-            action("Open Worktree Palette", .jumpPalette, key: "j")
-            action("Go to File…", .quickOpen, key: "p")
+            action(.worktreePalette); action(.worktreeQuickOpen)
+            action(.sidebarExplorerToggle); action(.sidebarSourceControlToggle)
+            action(.sidebarChecksToggle); action(.sidebarPortsToggle)
             Divider()
-            action("Show Explorer", .showExplorer, key: "e", modifiers: [.command, .shift])
-            action("Show Source Control", .showSourceControl, key: "g", modifiers: [.command, .shift])
-            action("Show Ports", .showPorts, key: "i", modifiers: [.command, .shift])
-            Divider()
-            Button("Reset Size") { zoom = 1 }.keyboardShortcut("0", modifiers: .command)
-            Button("Zoom In") { zoom = min(1.5, zoom + 0.1) }.keyboardShortcut("=", modifiers: .command)
-            Button("Zoom Out") { zoom = max(0.75, zoom - 0.1) }.keyboardShortcut("-", modifiers: .command)
+            action(.zoomReset); action(.zoomIn); action(.zoomOut)
+            action(.appForceReload)
+        }
+        CommandMenu("Tabs") {
+            ForEach(KeybindingRegistry.definitions.filter { $0.scope == .tabs && ![KeybindingAction.tabClose, .tabCloseAll, .tabReopenClosed, .tabRename, .tabNewTerminal, .tabSelectByIndex].contains($0.action) }, id: \.action) { definition in
+                action(definition.action)
+            }
+            Menu("Select Tab") {
+                ForEach(0..<9, id: \.self) { index in
+                    Button("Tab \(index + 1)") { actions?.perform(.keybinding(.tabSelectByIndex, index: index)) }
+                        .keyboardShortcut(bindings.shortcut(.tabSelectByIndex, index: index))
+                        .disabled(actions?.canPerform(.tabSelectByIndex) != true)
+                }
+            }
         }
         CommandMenu("Terminal") {
-            action("Clear Screen", .clearTerminal, key: "k")
-            action("Previous Recent Tab", .recentTab, key: .tab, modifiers: .control)
-            Menu("Select Tab") {
-                ForEach(1...9, id: \.self) { index in
-                    action("Tab \(index)", .selectTab(index), key: KeyEquivalent(Character(String(index))), modifiers: .control)
+            ForEach(KeybindingRegistry.definitions.filter { $0.scope == .terminal }, id: \.action) { definition in action(definition.action) }
+        }
+        CommandMenu("Other Actions") {
+            ForEach(KeybindingScope.allCases.filter { ![KeybindingScope.tabs, .terminal].contains($0) }, id: \.self) { scope in
+                Menu(scope.rawValue.capitalized) {
+                    ForEach(KeybindingRegistry.definitions.filter { $0.scope == scope }, id: \.action) { definition in action(definition.action) }
                 }
             }
         }
@@ -131,13 +147,29 @@ struct SmthzShellCommands: Commands {
             Button("Getting Started with smthz") { actions?.perform(.gettingStarted) }
             Divider()
             Button("Keyboard Shortcuts") { actions?.perform(.keyboardShortcuts) }
+            Button("Check for Updates…") { unavailable("Update checking") }
+            Button("Report Crash…") { unavailable("Crash reporting") }
         }
     }
-
-    private func action(_ title: String, _ action: SmthzShellActions.Action,
-                        key: KeyEquivalent, modifiers: EventModifiers = .command) -> some View {
-        Button(title) { actions?.perform(action) }.keyboardShortcut(key, modifiers: modifiers)
+    private func unavailable(_ title: String) {
+        let alert = NSAlert(); alert.messageText = title
+        alert.informativeText = "Not available yet."; alert.runModal()
     }
+    private func editingAction(_ action: KeybindingAction, selector: String) -> some View {
+        let chord = (bindings.editingNativeText ? KeybindingRegistry.defaults : bindings.registry).chords(for: action).first
+        return Button(action.definition.title) {
+            NSApp.sendAction(Selector(selector), to: NSApp.keyWindow?.firstResponder, from: nil)
+        }
+        .keyboardShortcut(chord.flatMap { bindings.shortcut($0) })
+        .disabled(!bindings.editingNativeText && actions?.canPerform(action) != true)
+    }
+    private func action(_ action: KeybindingAction) -> some View {
+        Button(action.definition.title) { actions?.perform(.keybinding(action, index: nil)) }
+            .keyboardShortcut(bindings.shortcut(action))
+            .disabled(!action.available || actions?.canPerform(action) != true)
+            .help(action.available ? action.definition.title : "Not available yet")
+    }
+
 }
 
 @MainActor

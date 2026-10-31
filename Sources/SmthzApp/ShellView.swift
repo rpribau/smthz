@@ -58,14 +58,20 @@ struct ShellView: View {
             surfaces
         }
         .environment(\.openShellSettings, { openSettings("appearance") })
-        .environment(\.smthzShellActions, SmthzShellActions(perform: perform))
-        .focusedSceneValue(\.smthzShellActions, SmthzShellActions(perform: perform))
+        .environment(\.smthzShellActions, SmthzShellActions(canPerform: canPerform, perform: perform))
+        .focusedSceneValue(\.smthzShellActions, SmthzShellActions(canPerform: canPerform, perform: perform))
         .environment(\.smthzProjectActions, ["Local host": SmthzProjectActions(
             createWorkspace: { overlay = .newWorkspace })])
         .environment(\.smthzWorkspaceDirectories, model.rootURL.map { ["default": $0] } ?? [:])
         .environment(\.smthzWorkspaceActions, ["default": SmthzWorkspaceActions(
             rename: { model.workspaceTitle = $0 }, setPinned: { model.workspacePinned = $0 },
             setUnread: { model.workspaceUnread = $0 }, delete: { overlay = .deleteWorkspace })])
+        .background(SmthzRegistryShortcutMonitor(actions: SmthzShellActions(canPerform: canPerform, perform: perform), enabled: overlay == nil && renameID == nil))
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in SmthzKeybindings.shared.updateFocus() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in SmthzKeybindings.shared.reload() }
+        .onChange(of: SmthzKeybindings.shared.diagnostics, initial: true) { _, diagnostics in
+            if !diagnostics.isEmpty { toast = SmthzToastMessage(title: "Keybinding configuration", description: diagnostics.map(\.message).joined(separator: "\n"), kind: .error) }
+        }
         .background(SmthzShellEscapeKey(perform: dismissTopSurface))
         .background(WindowChrome()).ignoresSafeArea().tint(SmthzTheme.foreground)
         .allowsWindowActivationEvents()
@@ -88,7 +94,6 @@ struct ShellView: View {
             Button("Rename", action: commitRename).buttonStyle(SmthzButtonStyle())
         }
         .background {
-            Button("Create workspace") { overlay = .newWorkspace }.keyboardShortcut("n").hidden()
             if overlay != nil {
                 Button("Dismiss overlay", action: dismiss).keyboardShortcut(.cancelAction).hidden()
             }
@@ -133,7 +138,7 @@ struct ShellView: View {
             closeSplitPane: { id in model.selectedSessionID = id; if let tab = model.activeTab { closePane(tab.activePane, tab.id) } },
             command: { quickCommandsOpen.toggle() }, createActions: createActions,
             closeOthers: closeOthers, colourChange: { model.setColor($0, color: $1) },
-            copyResult: { success in toast = SmthzToastMessage(title: success ? "Tab ID copied" : "Could not copy Tab ID", kind: success ? .success : .error) })
+            copyResult: { success in toast = SmthzToastMessage(title: success ? "Tab ID copied" : "Could not copy Tab ID", kind: success ? .success : .error) }, groups: model.tabGroups, groupAction: model.groupAction)
             .padding(.trailing, 32)
             .popover(isPresented: $quickCommandsOpen) {
                 QuickCommandsMenu(canRun: model.selectedSessionID != nil && model.hostIsRunning,
@@ -142,13 +147,13 @@ struct ShellView: View {
     }
     private var createActions: [TabCreateAction] {
         [TabCreateAction(id: "shell", title: "New Terminal", icon: .squareTerminal,
-                         enabled: model.hostIsRunning && !model.creatingShell, shortcut: "⌘T", perform: newShell)]
-        + [("agent", "Launch agent", "bot", "⌥⌘T"), ("browser", "New Browser Tab", "globe", "⌘⇧B"),
-           ("emulator", "New Mobile Emulator", "smartphone", "⌥⌘⇧E"),
-           ("markdown", "New Markdown", "file-plus", "⌘⇧M"), ("open-markdown", "Open Markdown...", "file-text", "⌘⇧O")]
-            .map { id, title, icon, shortcut in
+                         enabled: model.hostIsRunning && !model.creatingShell, shortcut: SmthzKeybindings.shared.label(.tabNewTerminal), perform: newShell)]
+        + [("agent", "Launch agent", "bot", KeybindingAction.tabNewAgent), ("browser", "New Browser Tab", "globe", .tabNewBrowser),
+           ("emulator", "New Mobile Emulator", "smartphone", .tabNewSimulator),
+           ("markdown", "New Markdown", "file-plus", .tabNewMarkdown), ("open-markdown", "Open Markdown...", "file-text", .tabOpenMarkdown)]
+            .map { id, title, icon, action in
                 TabCreateAction(id: id, title: title, icon: .init(rawValue: icon), enabled: false,
-                                shortcut: shortcut, unavailableReason: "Not available yet", perform: {})
+                                shortcut: SmthzKeybindings.shared.label(action), unavailableReason: "Not available yet", perform: {})
             }
     }
     @ViewBuilder private var workspace: some View {
@@ -158,12 +163,14 @@ struct ShellView: View {
         case .activity: SmthzMobilePage(onClose: returnToWorkspace)
         case .workspaces:
             if !model.hostIsRunning {
-                LandingView(variant: .hostNotRunning, onRetry: { monitorGeneration += 1 })
+                LandingView(variant: .hostNotRunning, bindings: SmthzKeybindings.shared.registry,
+                    onStartHost: { HostController.shared.start(); monitorGeneration += 1 },
+                    onRetry: { HostController.shared.start(); monitorGeneration += 1 })
             } else if model.activeTab != nil {
                 LayoutSplitView(model: model, close: closePane)
                     .accessibilityLabel("Terminal panes")
             } else {
-                LandingView(hasProjects: false, onAddProject: { overlay = .addProject },
+                LandingView(hasProjects: false, bindings: SmthzKeybindings.shared.registry, onAddProject: { overlay = .addProject },
                             onCreateWorkspace: { overlay = .newWorkspace })
             }
         }
@@ -253,6 +260,7 @@ struct ShellView: View {
     }
     private func perform(_ action: SmthzShellActions.Action) {
         switch action {
+        case .keybinding(let action, let index): performKeybinding(action, index: index)
         case .newTerminal: newShell()
         case .closeTab: if let tab = model.activeTab { closePane(tab.activePane, tab.id) }
         case .renameTab:
@@ -270,6 +278,69 @@ struct ShellView: View {
         case .showPorts: showPanel(.ports)
         case .explore: settingsPage = nil; returnToWorkspace(); model.selectedSessionID = nil
         case .gettingStarted: overlay = .onboarding
+        }
+    }
+    private func canPerform(_ action: KeybindingAction) -> Bool {
+        guard action.available, overlay == nil, renameID == nil else { return false }
+        if action == .tabNewTerminal { return model.hostIsRunning && !model.creatingShell }
+        if action == .tabReopenClosed { return model.hostIsRunning && !model.workspace.recentlyClosed.isEmpty }
+        if action.scope == .terminal || action.scope == .tabs {
+            return settingsPage == nil && appModel.destination == .workspaces && model.activeTab != nil
+                && !(NSApp.keyWindow?.firstResponder is NSTextView)
+        }
+        return true
+    }
+    private func performKeybinding(_ action: KeybindingAction, index: Int?) {
+        guard canPerform(action) else { return }
+        switch action {
+        case .tabNewTerminal: newShell()
+        case .tabClose, .terminalClosePane: perform(.closeTab)
+        case .tabCloseAll:
+            confirmations.confirmClose(.otherTabs, tabIDs: model.visibleIDs, pinnedTabIDs: model.pinned) { ids in
+                Task { for id in ids { await model.close(id) } }
+            }
+        case .tabRename: perform(.renameTab)
+        case .tabReopenClosed: Task { await model.reopenClosedTab() }
+        case .tabNextAllTypes, .tabNextSameType, .tabNextTerminal: model.cycleTab(forward: true)
+        case .tabPreviousAllTypes, .tabPreviousSameType, .tabPreviousTerminal: model.cycleTab(forward: false)
+        case .tabPreviousRecent: model.paneCommand(.previousRecentTab(.home))
+        case .tabSelectByIndex: if let index { model.paneCommand(.selectTab(.home, index: index)) }
+        case .tabOpenQuickCommandsMenu: quickCommandsOpen.toggle()
+        case .terminalSplitRight, .terminalSplitDown:
+            if let tab = model.activeTab { Task { await model.split(tab.id, pane: tab.activePane, side: action == .terminalSplitRight ? .right : .bottom) } }
+        case .terminalFocusNextPane, .terminalFocusPreviousPane:
+            if let tab = model.activeTab { model.paneCommand(action == .terminalFocusNextPane ? .focusNextPane(tab.id) : .focusPreviousPane(tab.id)) }
+        case .terminalExpandPane: if let tab = model.activeTab { model.paneCommand(.toggleExpandPane(tab.id, tab.activePane)) }
+        case .terminalEqualizePaneSizes: if let tab = model.activeTab { model.paneCommand(.equalizePanes(tab.id)) }
+        case .terminalSetTitle:
+            if let tab = model.activeTab {
+                let alert = NSAlert(); alert.messageText = "Set Pane Title"
+                let field = NSTextField(string: model.workspace.panes[tab.activePane]?.title ?? "")
+                field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+                alert.accessoryView = field; alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Cancel")
+                if alert.runModal() == .alertFirstButtonReturn { model.paneCommand(.renamePane(tab.activePane, field.stringValue)) }
+            }
+        case .terminalClearPaneTitle: if let tab = model.activeTab { model.paneCommand(.renamePane(tab.activePane, nil)) }
+        case .terminalCopySelection, .terminalPaste, .terminalSelectAll, .terminalSearch:
+            let selector = action == .terminalCopySelection ? "copy:" : action == .terminalPaste ? "paste:" : action == .terminalSelectAll ? "selectAll:" : "performTextFinderAction:"
+            NSApp.sendAction(Selector(selector), to: NSApp.keyWindow?.firstResponder, from: nil)
+        case .terminalClear: perform(.clearTerminal)
+        case .appSettings: perform(.settings)
+        case .appForceReload: monitorGeneration += 1
+        case .worktreePalette: showJump()
+        case .worktreeQuickOpen: overlay = .files
+        case .workspaceCreate: overlay = .newWorkspace
+        case .viewTasks: appModel.destination = .tasks
+        case .sidebarLeftToggle: sidebarOpen.toggle()
+        case .sidebarRightToggle: rightSidebarOpen.toggle()
+        case .sidebarExplorerToggle: showPanel(.explorer)
+        case .sidebarSourceControlToggle: showPanel(.sourceControl)
+        case .sidebarChecksToggle: showPanel(.checks)
+        case .sidebarPortsToggle: showPanel(.ports)
+        case .zoomIn: model.terminalFontSize = min(40, model.terminalFontSize + 1)
+        case .zoomOut: model.terminalFontSize = max(8, model.terminalFontSize - 1)
+        case .zoomReset: model.terminalFontSize = 14
+        default: break // Registry unavailable actions never enter this dispatcher.
         }
     }
     private func showPanel(_ panel: RightSidebarPanel) { rightPanel = panel.rawValue; rightSidebarOpen = true }
