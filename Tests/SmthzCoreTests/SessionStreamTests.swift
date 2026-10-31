@@ -173,10 +173,13 @@ struct SessionStreamTests {
         let fixture = try StreamFixture()
         defer { withExtendedLifetime(fixture) {} }
         let session = try fixture.client.createSession(executable: "/bin/sh",
-            arguments: ["-c", "stty -opost; sleep .1; yes | head -c 50000000"])
+            arguments: ["-c", "stty -opost -echo; read go; yes | head -c 50000000"])
         let slow = fixture.client.subscribe(id: session.id)
-        // Leave the subscriber unread until it fills and disconnects.
+        // Leave the subscriber unread until it fills and disconnects. The flood
+        // waits for the go line: a late subscriber could otherwise fill and
+        // disconnect between two polls, so `== 1` would never be observed.
         try await streamEventually { fixture.service.activeSubscriberCount == 1 }
+        try fixture.client.write(id: session.id, data: Data("\n".utf8))
         try await streamEventually { fixture.service.activeSubscriberCount == 0 }
         var cursor: UInt64 = 0
         var bufferedBytes = 0
@@ -194,6 +197,7 @@ struct SessionStreamTests {
         // A fast reader may still overflow under arbitrary scheduler load. Each
         // retry continues at the last consumed cursor, checking every byte.
         var ended = false
+        var finalExit: HostSessionExit?
         var attempts = 0
         while !ended, attempts < 200 {
             attempts += 1
@@ -208,14 +212,30 @@ struct SessionStreamTests {
                         }
                     }
                     cursor = event.next
-                    if event.exit != nil { ended = true }
+                    if let exit = event.exit { ended = true; finalExit = exit }
                 }
             } catch HostClientError.streamBackpressure { continue }
             catch UnixSocketError.closed { continue } // Socket back-pressure deadline; replay the consumed cursor.
         }
         #expect(ended)
-        #expect(cursor == 50_000_000)
+        #expect(cursor == 50_000_000, "exit: \(String(describing: finalExit))")
         try await streamEventually { fixture.service.activeSubscriberCount == 0 }
+    }
+
+    @Test func framesSentBeforePeerCloseAreStillReceived() throws {
+        let path = "/tmp/sz-st-\(UUID().uuidString.prefix(8))/s"
+        defer { try? FileManager.default.removeItem(atPath: (path as NSString).deletingLastPathComponent) }
+        let server = try UnixSocketServer(path: path, handler: { $0 }, streamHandler: { _, send, _ in
+            try? send(Data("ack".utf8)); try? send(Data("exit".utf8)); return true
+        })
+        defer { server.stop() }
+        let client = try UnixSocketClient(path: path)
+        defer { client.close() }
+        #expect(try client.request(Data("subscribe".utf8)) == Data("ack".utf8))
+        // Let the server close first: Darwin then rejects setsockopt with EINVAL,
+        // which used to drop the already-sent final frame as `.closed`.
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(try client.receive() == Data("exit".utf8))
     }
 
     @Test func streamFramesRespectOneMiBCap() async throws {

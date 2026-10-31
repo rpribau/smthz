@@ -67,10 +67,11 @@ private func wsRawConnection(_ port: UInt16) throws -> NWConnection {
         try await withThrowingTaskGroup(of: Void.self) { group in
             for value in UInt8(1)...8 {
                 group.addTask {
-                    let client = try WebSocketClient(port: server.port)
+                    // 8 peers share one serial server queue; under load 5 s defaults have expired.
+                    let client = try WebSocketClient(port: server.port, timeout: 20)
                     defer { client.close() }
                     let payload = Data(repeating: value, count: 100_000)
-                    for _ in 0..<3 { #expect(try client.request(payload) == payload) }
+                    for _ in 0..<3 { #expect(try client.request(payload, timeout: 20) == payload) }
                 }
             }
             try await group.waitForAll()

@@ -307,8 +307,10 @@ public final class UnixSocketClient {
     public func receive() throws -> Data {
         guard fd >= 0 else { throw UnixSocketError.closed }
         var timeout = timeval(tv_sec: 0, tv_usec: 0)
+        // Darwin fails setsockopt with EINVAL once the peer has closed, yet the
+        // frames it sent first (e.g. a stream's exit) are still readable.
         guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-            socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 else { throw UnixSocketError.closed }
+            socklen_t(MemoryLayout.size(ofValue: timeout))) == 0 || errno == EINVAL else { throw UnixSocketError.closed }
         while true {
             if let response = try decoder.nextFrame() { return response }
             decoder.append(try readChunk(from: fd))

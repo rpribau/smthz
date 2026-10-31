@@ -105,7 +105,8 @@ struct AgentLaunchTests {
         let info = try f.client.launchAgent(f.request(.aider, prompt: "quiet marker"))
         #expect(ProcessInfo.processInfo.systemUptime - start >= 0.5)
         #expect(info.arguments == [])
-        let output = try f.output(info.id, contains: "quiet marker")
+        // The echo may arrive in several PTY chunks: wait for the paste terminator, not the text.
+        let output = try f.output(info.id, contains: "\u{1b}[201~")
         #expect(output.contains("\u{1b}[200~quiet marker\u{1b}[201~"))
     }
 
