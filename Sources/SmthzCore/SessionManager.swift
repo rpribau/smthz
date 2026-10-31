@@ -111,7 +111,8 @@ public final class SessionManager: @unchecked Sendable {
 
     public func create(executable: String, arguments: [String],
                        environment: [String: String] = ProcessInfo.processInfo.environment,
-                       workingDirectory: String? = nil, rows: Int = 24, cols: Int = 80) throws -> SessionInfo {
+                       workingDirectory: String? = nil, rows: Int = 24, cols: Int = 80,
+                       id requestedID: String? = nil) throws -> SessionInfo {
         journalLock.lock()
         defer { journalLock.unlock() }
         guard !stopped else { throw SessionError.notRunning }
@@ -124,7 +125,9 @@ public final class SessionManager: @unchecked Sendable {
         guard stat(executable, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG else {
             throw SessionError.badRequest
         }
-        let id = RequestID.generate().rawValue
+        let id = requestedID ?? RequestID.generate().rawValue
+        guard UUID(uuidString: id)?.uuidString.lowercased() == id,
+              lock.withLock({ sessions[id] == nil }) else { throw SessionError.badRequest }
         let disk: Scrollback?
         do {
             disk = try scrollbackDirectory.map { try Scrollback(directory: $0, id: id, capacity: scrollbackLimit) }

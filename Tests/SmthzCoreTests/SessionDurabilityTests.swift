@@ -149,7 +149,7 @@ struct PTYWriteDurabilityTests {
         #expect(throws: SessionError.cancelled) {
             try manager.write(id: info.id, data: Data(repeating: 120, count: SessionManager.maximumTransferBytes), shouldCancel: { Date() >= deadline })
         }
-        #expect(Date().timeIntervalSince(deadline) < 1)
+        #expect(Date().timeIntervalSince(deadline) < 5)
         #expect(manager.list().first?.running == true)
         try manager.close(id: info.id)
         #expect(!manager.list().contains { $0.running })

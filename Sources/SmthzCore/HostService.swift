@@ -60,6 +60,7 @@ public final class HostService: @unchecked Sendable {
     private let routedRequests = HostRepoGate()
     private let journal: EventJournal
     public let sessionManager: SessionManager
+    public let agentLaunch: AgentLaunchService
     private let hostIdentity: ProcessIdentity?
     private let hostEnvironment: [String: String]
     public let capabilityTokenPath: String
@@ -111,7 +112,9 @@ public final class HostService: @unchecked Sendable {
 
     public init(journal: EventJournal, hostIdentity: ProcessIdentity?, sessionManager: SessionManager? = nil, capabilityTokenPath: String? = nil,
                 hostEnvironment: [String: String] = ProcessInfo.processInfo.environment,
-                scrollbackDirectory: URL? = nil, router: HostRouter = HostRouter(), onShutdown: (@Sendable () -> Void)? = nil) {
+                scrollbackDirectory: URL? = nil, router: HostRouter = HostRouter(), agentSocketPath: String? = nil,
+                agentStateDirectory: URL? = nil,
+                onShutdown: (@Sendable () -> Void)? = nil) {
         self.router = router
         self.scrollbackDirectory = scrollbackDirectory
         self.onShutdown = onShutdown
@@ -120,8 +123,26 @@ public final class HostService: @unchecked Sendable {
         self.capabilityTokenPath = tokenPath
         self.capabilityToken = try? HostCapabilityToken.load(path: tokenPath, create: true)
         self.journal = journal
-        self.sessionManager = sessionManager ?? SessionManager(journal: journal)
+        let sessions = sessionManager ?? SessionManager(journal: journal)
+        self.sessionManager = sessions
+        let stateDirectory = agentStateDirectory ?? URL(fileURLWithPath: journal.path).deletingLastPathComponent()
+        let launcher = AgentLaunchService(sessions: sessions, stateDirectory: stateDirectory,
+            socketPath: agentSocketPath ?? stateDirectory.appendingPathComponent("smthzd.sock").path,
+            environment: hostEnvironment)
+        self.agentLaunch = launcher
         self.hostIdentity = hostIdentity
+        router.register("agent.list", methodClass: .read) { _, context in
+            let detected = try launcher.list(checkCancellation: { try context.checkCancellation() })
+            return ["agents": .array(detected.map { agent in
+                .object(["id": .string(agent.id.rawValue), "executable": .string(agent.executable),
+                         "version": agent.version.map(HostJSON.string) ?? .null])
+            })]
+        }
+        router.register("agent.launch", methodClass: .mutation, repository: { _ in nil }) { params, context in
+            let request = try JSONDecoder().decode(AgentLaunchRequest.self, from: JSONEncoder().encode(params))
+            let session = try launcher.launch(request, checkCancellation: { try context.checkCancellation() })
+            return try JSONDecoder().decode([String: HostJSON].self, from: JSONEncoder().encode(session))
+        }
     }
 
     /// Consumes a dedicated connection. Socket writes provide back-pressure;

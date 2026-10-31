@@ -61,19 +61,28 @@ struct HostShellRPCTests {
         let second = try retry.createSession(requestID: requestID, executable: "/bin/sh", arguments: arguments)
         #expect(first == second)
         #expect(try retry.list().sessions.map(\.id) == [first.id])
-        let ps = Process()
-        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
-        ps.arguments = ["-axo", "pid=,ppid=,command="]
-        let pipe = Pipe()
-        ps.standardOutput = pipe
-        try ps.run()
-        let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        ps.waitUntilExit()
-        #expect(ps.terminationStatus == 0)
-        let children = text.split(whereSeparator: \.isNewline).filter { line in
-            let fields = line.split(whereSeparator: \.isWhitespace)
-            return fields.count >= 3 && Int32(fields[1]) == getpid() && line.contains(marker)
+        func markedChildren() throws -> [Substring] {
+            let ps = Process()
+            ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+            ps.arguments = ["-axo", "pid=,ppid=,command="]
+            let pipe = Pipe()
+            ps.standardOutput = pipe
+            try ps.run()
+            let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            ps.waitUntilExit()
+            #expect(ps.terminationStatus == 0)
+            return text.split(whereSeparator: \.isNewline).filter { line in
+                let fields = line.split(whereSeparator: \.isWhitespace)
+                return fields.count >= 3 && Int32(fields[1]) == getpid() && line.contains(marker)
+            }
         }
+        // Under load ps can sample the child before exec shows the marker in its command line.
+        var children: [Substring] = []
+        let deadline = Date(timeIntervalSinceNow: 10)
+        repeat {
+            children = try markedChildren()
+            if children.isEmpty { Thread.sleep(forTimeInterval: 0.05) }
+        } while children.isEmpty && Date() < deadline
         #expect(children.count == 1)
         #expect(children.first?.split(whereSeparator: \.isWhitespace).first.flatMap { Int32($0) } == first.pid)
     }

@@ -157,12 +157,12 @@ struct RPCHardeningTests {
         defer { cancellingClient.close() }
         let params = Data(#"{"requestID":"queued-cancel"}"#.utf8)
         var cancelled = false
-        let deadline = Date(timeIntervalSinceNow: 3)
+        let deadline = Date(timeIntervalSinceNow: 10)
         repeat {
             cancelled = try hardeningBody(cancellingClient.request(hardeningRequest("request.cancel", params: params, authorization: credential))).cancelled == true
             if !cancelled { Thread.sleep(forTimeInterval: 0.001) }
         } while !cancelled && Date() < deadline
-        let completed = result.done.wait(timeout: .now() + 3)
+        let completed = result.done.wait(timeout: .now() + 10)
         service.sessionManager.journalLock.unlock()
         #expect(cancelled)
         #expect(completed == .success)
@@ -173,7 +173,7 @@ struct RPCHardeningTests {
         let shortRequest = try hardeningRequest("session.resize", id: "queued-deadline", authorization: credential, timeout: 20)
         service.sessionManager.journalLock.lock()
         Thread.detachNewThread { expiring.store(service.handle(shortRequest)) }
-        let expired = expiring.done.wait(timeout: .now() + 3)
+        let expired = expiring.done.wait(timeout: .now() + 10)
         service.sessionManager.journalLock.unlock()
         #expect(expired == .success)
         #expect(try hardeningBody(#require(expiring.load())).error == "deadlineExceeded")

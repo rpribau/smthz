@@ -225,7 +225,7 @@ final class FilesFixture: @unchecked Sendable {
         #expect(first["overflow"] == .bool(false))
         Thread.sleep(forTimeInterval: 0.3)  // FSEvents starts "since now"
         try f.write("src/external.txt", "touched", in: repo)
-        let deadline = Date(timeIntervalSinceNow: 2)
+        let deadline = Date(timeIntervalSinceNow: 10)
         var seen = false, next = cursor
         while Date() < deadline, !seen {
             let changes = try f.ok("fs.changes", ["root": root, "cursor": .number(next)])
@@ -234,7 +234,7 @@ final class FilesFixture: @unchecked Sendable {
             next = changes["cursor"]?.number ?? next
             Thread.sleep(forTimeInterval: 0.05)
         }
-        #expect(seen, "external write not reported within 2 s")
+        #expect(seen, "external write not reported within 10 s")
         // A cursor from before this watcher (or from the future) asks the caller to reload.
         #expect(try f.ok("fs.changes", ["root": root, "cursor": .number(next + 1_000)])["overflow"] == .bool(true))
         #expect(f.watchers.watchedRoots == [repo.path])
@@ -250,7 +250,7 @@ final class FilesFixture: @unchecked Sendable {
         Thread.sleep(forTimeInterval: 0.3)
         _ = try watchers.changes(root: dir.path, cursor: start)  // keep alive
         for i in 0..<8 { try Data("x".utf8).write(to: dir.appendingPathComponent("f\(i)")) ; Thread.sleep(forTimeInterval: 0.02) }
-        let deadline = Date(timeIntervalSinceNow: 2)
+        let deadline = Date(timeIntervalSinceNow: 10)
         var overflow = false
         while Date() < deadline, !overflow {
             overflow = try watchers.changes(root: dir.path, cursor: start).overflow

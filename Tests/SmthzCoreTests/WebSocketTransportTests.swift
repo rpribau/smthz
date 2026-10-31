@@ -9,7 +9,7 @@ private final class WSTestResult<Value: Sendable>: @unchecked Sendable {
     private var value: Value?
     func set(_ value: Value) { lock.withLock { self.value = value }; semaphore.signal() }
     func wait() throws -> Value {
-        try #require(semaphore.wait(timeout: .now() + 5) == .success)
+        try #require(semaphore.wait(timeout: .now() + 20) == .success)
         return try #require(lock.withLock { value })
     }
 }
@@ -43,9 +43,10 @@ private func wsRawConnection(_ port: UInt16) throws -> NWConnection {
         defer { client.close() }
         let envelope = RPCEnvelope(version: 1, requestID: UUID().uuidString, method: "ping", payload: Data([1, 2]))
         let payload = try JSONEncoder().encode(envelope)
-        let response = try client.request(payload)
+        // Generous timeouts: under machine load the first round trip has exceeded the 5 s default.
+        let response = try client.request(payload, timeout: 20)
         #expect(try JSONDecoder().decode(RPCEnvelope.self, from: response) == envelope)
-        #expect(try client.request(Data([42])) == Data([42]))
+        #expect(try client.request(Data([42]), timeout: 20) == Data([42]))
     }
 
     @Test func exactOneMiBLimitAndLocalValidation() throws {
@@ -129,7 +130,7 @@ private func wsRawConnection(_ port: UInt16) throws -> NWConnection {
         let release = DispatchSemaphore(value: 0)
         let server = try WebSocketServer { data in
             entered.signal()
-            _ = release.wait(timeout: .now() + 3)
+            _ = release.wait(timeout: .now() + 10)
             return data
         }
         defer { release.signal(); server.stop() }
@@ -139,7 +140,7 @@ private func wsRawConnection(_ port: UInt16) throws -> NWConnection {
             do { _ = try client.request(Data([1])); ended.set(false) }
             catch { ended.set(true) }
         }
-        try #require(entered.wait(timeout: .now() + 2) == .success)
+        try #require(entered.wait(timeout: .now() + 10) == .success)
         client.close()
         #expect(try ended.wait())
         client.close()

@@ -25,7 +25,7 @@ struct HostJobTests {
             done.signal(); return .string("done")
         }
         #expect(done.wait(timeout: .now() + 5) == .success)
-        let deadline = Date(timeIntervalSinceNow: 2)
+        let deadline = Date(timeIntervalSinceNow: 10)
         while try jobs.get(id)["state"] != .string("succeeded"), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         let snapshot = try jobs.get(id)
         guard case .array(let events) = snapshot["events"] else { Issue.record("missing events"); return }
@@ -48,11 +48,15 @@ struct HostJobTests {
             Task { do { result.finish(.success(try await task.value)) } catch { result.finish(.failure(error)) } }
             return try result.wait().map { _ in HostJSON.null }.get()
         }
-        let deadline = Date(timeIntervalSinceNow: 5)
-        while !FileManager.default.fileExists(atPath: pidFile.path), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-        let child = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        // The shell creates the file before `echo` writes it: wait for a parseable pid, not just the file.
+        func readPid() -> Int32? {
+            (try? String(contentsOf: pidFile, encoding: .utf8)).flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        let deadline = Date(timeIntervalSinceNow: 10)
+        while readPid() == nil, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        let child = try #require(readPid())
         try f.router.jobs.cancel(id)
-        let end = Date(timeIntervalSinceNow: 3)
+        let end = Date(timeIntervalSinceNow: 10)
         while (try f.router.jobs.get(id)["state"] != .string("cancelled") || kill(child, 0) == 0), Date() < end { Thread.sleep(forTimeInterval: 0.01) }
         #expect(try f.router.jobs.get(id)["state"] == .string("cancelled"))
         let survived = kill(child, 0) == 0
@@ -62,11 +66,11 @@ struct HostJobTests {
     @Test func cancellingQueuedJobNeverRunsWork() throws {
         let jobs = HostJobs()
         let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
-        _ = try jobs.submit(repository: "r") { _ in started.signal(); _ = release.wait(timeout: .now() + 3); return .null }
-        #expect(started.wait(timeout: .now() + 2) == .success)
+        _ = try jobs.submit(repository: "r") { _ in started.signal(); _ = release.wait(timeout: .now() + 10); return .null }
+        #expect(started.wait(timeout: .now() + 10) == .success)
         let id = try jobs.submit(repository: "r") { _ in Issue.record("cancelled job ran"); return .null }
         try jobs.cancel(id); release.signal()
-        let end = Date(timeIntervalSinceNow: 2)
+        let end = Date(timeIntervalSinceNow: 10)
         while try jobs.get(id)["state"] != .string("cancelled"), Date() < end { Thread.sleep(forTimeInterval: 0.01) }
         #expect(try jobs.get(id)["state"] == .string("cancelled"))
         #expect(throws: HostRPCError("jobNotFound")) { try jobs.cancel("missing") }

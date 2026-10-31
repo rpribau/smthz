@@ -162,6 +162,19 @@ public final class HostClient {
         }
     }
 
+    public func listAgents() throws -> [DetectedAgent] {
+        struct Empty: Encodable {}
+        struct Entry: Decodable { let id: AgentID; let executable: String; let version: String? }
+        struct Result: Decodable { let agents: [Entry] }
+        let result: Result = try callWithDetail(method: "agent.list", params: Empty(), timeoutMilliseconds: 30_000)
+        return result.agents.map { DetectedAgent(id: $0.id, executable: $0.executable, version: $0.version) }
+    }
+
+    public func launchAgent(_ request: AgentLaunchRequest,
+                            requestID: String = RequestID.generate().rawValue) throws -> SessionInfo {
+        try callWithDetail(method: "agent.launch", params: request, requestID: requestID, timeoutMilliseconds: 30_000)
+    }
+
     public func call<Params: Encodable, Result: Decodable>(method: String, params: Params,
         requestID: String = RequestID.generate().rawValue, timeoutMilliseconds: Int = 5_000) throws -> Result {
         let payload = try rawCall(method: method, params: JSONEncoder().encode(params), requestID: requestID,

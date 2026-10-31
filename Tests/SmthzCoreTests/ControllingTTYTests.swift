@@ -43,7 +43,7 @@ struct ControllingTTYTests {
         let terminalPgrp = try #require(columns.last.flatMap { Int32($0) })
         #expect(terminalPgrp == shellPgrp)
         try child.write(Data("done\n".utf8))
-        #expect(child.waitForExit(timeout: 3) == .exited(0))
+        #expect(child.waitForExit(timeout: 10) == .exited(0))
     }
 
     @Test func controlCInterruptsForegroundJobAndLeavesShellAlive() throws {

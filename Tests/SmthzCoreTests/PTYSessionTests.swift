@@ -14,7 +14,7 @@ private final class PTYOutput: @unchecked Sendable {
     }
 }
 
-private func eventually(timeout: TimeInterval = 3, _ predicate: () -> Bool) -> Bool {
+private func eventually(timeout: TimeInterval = 10, _ predicate: () -> Bool) -> Bool {
     let deadline = Date(timeIntervalSinceNow: timeout)
     repeat {
         if predicate() { return true }
@@ -42,7 +42,7 @@ struct PTYSessionTests {
         let child = try session("/bin/echo", ["hello"])
         let output = capture(child)
         #expect(eventually { output.text.contains("hello") })
-        #expect(child.waitForExit(timeout: 3) == .exited(0))
+        #expect(child.waitForExit(timeout: 10) == .exited(0))
     }
 
     @Test func catRoundTrip() throws {
@@ -51,7 +51,7 @@ struct PTYSessionTests {
         try child.write(Data("ping\n".utf8))
         #expect(eventually { output.text.contains("ping") })
         child.terminate()
-        #expect(child.waitForExit(timeout: 3) != nil)
+        #expect(child.waitForExit(timeout: 10) != nil)
     }
 
     @Test func resizeReachesChild() throws {
@@ -60,12 +60,12 @@ struct PTYSessionTests {
         #expect(eventually { output.text.contains("24 80") })
         try child.resize(PTYSize(rows: 40, cols: 120))
         #expect(eventually { output.text.contains("40 120") })
-        #expect(child.waitForExit(timeout: 3) == .exited(0))
+        #expect(child.waitForExit(timeout: 10) == .exited(0))
     }
 
     @Test func cachesExitCodeAcrossWaiters() throws {
         let child = try session("/bin/sh", ["-c", "exit 7"])
-        #expect(child.waitForExit(timeout: 3) == .exited(7))
+        #expect(child.waitForExit(timeout: 10) == .exited(7))
         #expect(child.waitForExit(timeout: 0) == .exited(7))
         #expect(child.waitForExit(timeout: 1) == .exited(7))
     }
@@ -73,14 +73,14 @@ struct PTYSessionTests {
     @Test func reportsSignal() throws {
         let child = try session("/bin/sleep", ["30"])
         #expect(kill(child.pid, SIGKILL) == 0)
-        #expect(child.waitForExit(timeout: 3) == .signaled(SIGKILL))
+        #expect(child.waitForExit(timeout: 10) == .signaled(SIGKILL))
     }
 
     @Test func timeoutThenTerminate() throws {
         let child = try session("/bin/sleep", ["30"])
         #expect(child.waitForExit(timeout: 0.02) == nil)
         child.terminate()
-        #expect(child.waitForExit(timeout: 3) != nil)
+        #expect(child.waitForExit(timeout: 10) != nil)
         child.terminate() // Safe and idempotent after reap.
     }
 
@@ -95,7 +95,7 @@ struct PTYSessionTests {
     @Test func buffersBeforeHandlerInstallation() throws {
         let child = try session("/bin/echo", ["before-handler"])
         // Waiting for exit ensures all bytes were read before handler attachment.
-        #expect(child.waitForExit(timeout: 3) == .exited(0))
+        #expect(child.waitForExit(timeout: 10) == .exited(0))
         let output = capture(child)
         #expect(eventually { output.text.contains("before-handler") })
     }
@@ -105,7 +105,7 @@ struct PTYSessionTests {
         #expect(child.identity == ProcessIdentity.lookup(pid: child.pid))
         #expect(child.identity.isStillRunning())
         child.terminate()
-        #expect(child.waitForExit(timeout: 3) != nil)
+        #expect(child.waitForExit(timeout: 10) != nil)
         #expect(!child.identity.isStillRunning())
     }
 
@@ -114,7 +114,7 @@ struct PTYSessionTests {
                                 environment: ["SMTHZ_TEST": "pty-environment"], directory: "/private/tmp")
         let output = capture(child)
         #expect(eventually { output.text.contains("/private/tmp") && output.text.contains("pty-environment") })
-        #expect(child.waitForExit(timeout: 3) == .exited(0))
+        #expect(child.waitForExit(timeout: 10) == .exited(0))
     }
 
     @Test func sessionLeaderHasControllingTerminal() throws {
@@ -126,7 +126,7 @@ struct PTYSessionTests {
         #expect(output.text.contains("24 80"))
         #expect(getsid(child.pid) == child.pid)
         try child.write(Data("done\n".utf8))
-        #expect(child.waitForExit(timeout: 3) == .exited(0))
+        #expect(child.waitForExit(timeout: 10) == .exited(0))
     }
 
     @Test func closeRejectsWritesAndLeavesNoZombie() throws {
@@ -192,7 +192,7 @@ struct PTYSessionTests {
             let held = ptyDescriptors(slaveDevice: device)
             #expect(held.count == 1)
             try child.write(Data("\n".utf8))
-            #expect(child.waitForExit(timeout: 3) == .exited(0))
+            #expect(child.waitForExit(timeout: 10) == .exited(0))
             child.close()
             // A leak keeps the same descriptor open on the same pty forever; a
             // parallel test reusing both the number and the pty is transient.

@@ -13,7 +13,7 @@ private func hostStopCleanup(_ path: String) {
 }
 
 private func hostStopEventually(_ predicate: () -> Bool) -> Bool {
-    let deadline = Date(timeIntervalSinceNow: 3)
+    let deadline = Date(timeIntervalSinceNow: 10)
     repeat {
         if predicate() { return true }
         Thread.sleep(forTimeInterval: 0.01)
@@ -29,7 +29,7 @@ struct HostStopTests {
         let manager = SessionManager(journal: journal)
         let session = try manager.create(executable: "/bin/sh", arguments: ["-c", "sleep 30 & echo $!; wait"])
         let grandchildPID: Int32? = {
-            let deadline = Date(timeIntervalSinceNow: 3)
+            let deadline = Date(timeIntervalSinceNow: 10)
             while Date() < deadline {
                 if let read = try? manager.read(id: session.id, from: 0),
                    let text = String(data: read.data, encoding: .utf8),

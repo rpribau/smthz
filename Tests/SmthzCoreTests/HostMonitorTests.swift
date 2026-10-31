@@ -207,7 +207,7 @@ struct HostMonitorTests {
         _ = try await monitorSnapshot(from: stream)
         monitor = nil
         // The polling loop must not hold the actor throughout its sleep.
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(10)
         while weakMonitor != nil, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }

@@ -37,7 +37,7 @@ struct ResourceUsage: Equatable {
 }
 
 /// UI-DETAIL §6 "Resource Manager" popover: summary, then the "This computer" PTY list with
-/// Go to terminal and End (confirmed). CPU, orphan detection, daemon restart and workspace
+/// Go to terminal and End (confirmed), then "Clean up workspaces…" (WP-M4-CLEANUP). CPU, orphan detection, daemon restart and workspace
 /// trees need backends smthz does not have; they are not shown.
 struct ResourceManagerPopover: View {
     let sessions: [SessionInfo]
@@ -56,6 +56,8 @@ struct ResourceManagerPopover: View {
                 header
                 Divider().overlay(SmthzTheme.border)
                 list
+                Divider().overlay(SmthzTheme.border)
+                cleanupEntry
             }
         }
         .font(SmthzFont.ui(size: 12))
@@ -74,6 +76,21 @@ struct ResourceManagerPopover: View {
             Text(hostLabel).font(SmthzFont.ui(size: 11)).foregroundStyle(SmthzTheme.mutedForeground)
         }
         .padding(12)
+    }
+
+    /// WP-M4-CLEANUP: opens the Clean up workspaces window (`WorkspaceCleanupView`).
+    private var cleanupEntry: some View {
+        Button { WorkspaceCleanupWindow.show() } label: {
+            HStack(spacing: 8) {
+                SmthzIcon.view("eraser", size: 12)
+                Text("Clean up workspaces…")
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Find idle, clean workspaces and delete them")
     }
 
     private func summary(_ title: String, _ value: String) -> some View {

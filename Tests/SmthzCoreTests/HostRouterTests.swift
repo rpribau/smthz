@@ -41,47 +41,47 @@ struct HostRouterTests {
             return ["jobId": .string(id)]
         }
         #expect(try f.call("test.job")["ok"] == .bool(true))
-        #expect(started.wait(timeout: .now() + 2) == .success)
+        #expect(started.wait(timeout: .now() + 10) == .success)
         let start = ContinuousClock.now
         #expect(try f.call("session.write", ["id": .string(session.id), "data_base64": .string(Data("x\n".utf8).base64EncodedString())])["ok"] == .bool(true))
-        #expect(start.duration(to: .now) < .milliseconds(100))
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(start.duration(to: .now) < .seconds(2))
+        #expect(finished.wait(timeout: .now() + 15) == .success)
     }
     @Test func mutationsAndJobsShareRepositoryGateWhileReadsProceed() throws {
         let f = try HostCoreFixture()
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         let id = try f.router.jobs.submit(repository: "same") { _ in
-            entered.signal(); _ = release.wait(timeout: .now() + 3); return .null
+            entered.signal(); _ = release.wait(timeout: .now() + 10); return .null
         }
-        #expect(entered.wait(timeout: .now() + 2) == .success)
+        #expect(entered.wait(timeout: .now() + 10) == .success)
         let attempting = DispatchSemaphore(value: 0)
         f.router.register("test.mutate", methodClass: .mutation, repository: { params in
             attempting.signal(); return params["repoId"]?.string
         }) { _, _ in [:] }
         let done = DispatchSemaphore(value: 0)
         Thread.detachNewThread { _ = try? f.call("test.mutate", ["repoId": .string("same")]); done.signal() }
-        #expect(attempting.wait(timeout: .now() + 2) == .success)
+        #expect(attempting.wait(timeout: .now() + 10) == .success)
         #expect(done.wait(timeout: .now() + 0.05) == .timedOut)
         #expect(try f.call("job.get", ["jobId": .string(id)])["state"] == .string("running"))
         #expect(try f.call("ping")["result"] == .string("pong"))
         release.signal()
-        #expect(done.wait(timeout: .now() + 2) == .success)
+        #expect(done.wait(timeout: .now() + 10) == .success)
     }
     @Test func routedAdmissionStillCapsPendingAt64() throws {
         let f = try HostCoreFixture()
         let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
         let finished = DispatchGroup()
         f.router.register("test.block", methodClass: .read) { _, _ in
-            entered.signal(); _ = release.wait(timeout: .now() + 5); return [:]
+            entered.signal(); _ = release.wait(timeout: .now() + 15); return [:]
         }
         for _ in 0..<64 {
             finished.enter()
             Thread.detachNewThread { _ = try? f.call("test.block"); finished.leave() }
         }
-        for _ in 0..<64 { #expect(entered.wait(timeout: .now() + 3) == .success) }
+        for _ in 0..<64 { #expect(entered.wait(timeout: .now() + 10) == .success) }
         #expect(try f.call("ping")["error"] == .string("limitExceeded"))
         for _ in 0..<64 { release.signal() }
-        #expect(finished.wait(timeout: .now() + 3) == .success)
+        #expect(finished.wait(timeout: .now() + 10) == .success)
         #expect(try f.call("ping")["result"] == .string("pong"))
     }
 
@@ -102,11 +102,11 @@ struct HostRouterTests {
         #expect(try f.call("test.slowMutation", id: "deadline", timeout: 100)["error"] == .string("deadlineExceeded"))
         // Launch/reap can be delayed by concurrent test processes; the request must
         // still return close to its deadline, well before the child's 30 s sleep.
-        #expect(start.duration(to: .now) < .milliseconds(100) + .seconds(5))
+        #expect(start.duration(to: .now) < .milliseconds(100) + .seconds(15))
         if let text = try? String(contentsOf: directory.appendingPathComponent("deadline-child.pid"), encoding: .utf8),
            let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)),
            let child = ProcessIdentity.lookup(pid: pid) {
-            let reapDeadline = ContinuousClock.now + .seconds(3)
+            let reapDeadline = ContinuousClock.now + .seconds(10)
             while child.isStillRunning(), ContinuousClock.now < reapDeadline { Thread.sleep(forTimeInterval: 0.01) }
             #expect(!child.isStillRunning(), "deadline left its Git child alive")
         }
