@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Toolchain versions
+        run: |
+          swift --version
+          xcodebuild -version
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test 2>&1 | tee test.log
+      - name: Test summary
+        if: always()
+        run: grep -E "Test run with|✘ Test" test.log | tail -20 >> "$GITHUB_STEP_SUMMARY" || true
+
+  bundle:
+    name: Package app bundle
+    runs-on: macos-26
+    timeout-minutes: 40
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+      - name: Package
+        run: scripts/package-app.sh
+      - name: Verify signature
+        run: codesign --verify --deep --strict build/smthz.app
