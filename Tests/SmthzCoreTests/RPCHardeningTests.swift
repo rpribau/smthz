@@ -77,9 +77,11 @@ struct RPCHardeningTests {
         let credential = try hardeningCredential(service: fixture.service)
         #expect(try hardeningBody(fixture.service.handle(hardeningRequest(authorization: credential))).ok)
         let entries = try fixture.journal.read(after: 0, limit: 10)
-        #expect(entries.count == 1)
-        #expect(!String(decoding: entries[0].payload, as: UTF8.self).contains(credential))
-        #expect(!String(decoding: entries[0].payload, as: UTF8.self).contains(token))
+        #expect(entries.isEmpty)
+        _ = fixture.service.handle(try hardeningRequest("session.resize", authorization: credential))
+        let mutation = try #require(fixture.journal.read(after: 0, limit: 10).first)
+        #expect(!String(decoding: mutation.payload, as: UTF8.self).contains(credential))
+        #expect(!String(decoding: mutation.payload, as: UTF8.self).contains(token))
     }
 
     @Test func capabilityFilePermissionsAndUnsafeFiles() throws {
@@ -106,16 +108,16 @@ struct RPCHardeningTests {
     @Test func idempotencyBindsCanonicalParamsAndMethodAcrossRestart() throws {
         let fixture = try HardeningFixture()
         let credential = try hardeningCredential(service: fixture.service)
-        let original = try hardeningRequest(id: "retry", params: Data(#"{"a":1,"b":2}"#.utf8), authorization: credential)
+        let original = try hardeningRequest("session.resize", id: "retry", params: Data(#"{"a":1,"b":2}"#.utf8), authorization: credential)
         let first = fixture.service.handle(original)
-        let reordered = try hardeningRequest(id: "retry", params: Data(#"{ "b": 2, "a": 1 }"#.utf8), authorization: credential)
+        let reordered = try hardeningRequest("session.resize", id: "retry", params: Data(#"{ "b": 2, "a": 1 }"#.utf8), authorization: credential)
         #expect(fixture.service.handle(reordered) == first)
-        #expect(try hardeningBody(fixture.service.handle(hardeningRequest("version", id: "retry", authorization: credential))).error == "idempotencyConflict")
-        #expect(try hardeningBody(fixture.service.handle(hardeningRequest(id: "retry", params: Data(#"{"a":2,"b":2}"#.utf8), authorization: credential))).error == "idempotencyConflict")
+        #expect(try hardeningBody(fixture.service.handle(hardeningRequest("session.close", id: "retry", authorization: credential))).error == "idempotencyConflict")
+        #expect(try hardeningBody(fixture.service.handle(hardeningRequest("session.resize", id: "retry", params: Data(#"{"a":2,"b":2}"#.utf8), authorization: credential))).error == "idempotencyConflict")
         let reopened = HostService(journal: try EventJournal(path: fixture.journal.path), hostIdentity: nil)
         #expect(try hardeningBody(reopened.handle(original)).error == "unauthorized")
         let newCredential = try hardeningCredential(service: reopened)
-        #expect(reopened.handle(try hardeningRequest(id: "retry", params: Data(#"{"b":2,"a":1}"#.utf8), authorization: newCredential)) == first)
+        #expect(reopened.handle(try hardeningRequest("session.resize", id: "retry", params: Data(#"{"b":2,"a":1}"#.utf8), authorization: newCredential)) == first)
         #expect(try fixture.journal.read(after: 0, limit: 10).count == 1)
     }
 
@@ -147,10 +149,10 @@ struct RPCHardeningTests {
         let server = try UnixSocketServer(path: fixture.socket) { service.handle($0) }
         defer { server.stop() }
         let credential = try hardeningCredential(service: service)
-        let request = try hardeningRequest(id: "queued-cancel", authorization: credential)
+        let request = try hardeningRequest("session.resize", id: "queued-cancel", authorization: credential)
         let result = HardeningResult()
         service.sessionManager.journalLock.lock()
-        DispatchQueue.global().async { result.store(service.handle(request)) }
+        Thread.detachNewThread { result.store(service.handle(request)) }
         let cancellingClient = try UnixSocketClient(path: fixture.socket)
         defer { cancellingClient.close() }
         let params = Data(#"{"requestID":"queued-cancel"}"#.utf8)
@@ -168,9 +170,9 @@ struct RPCHardeningTests {
         #expect(try fixture.journal.entry(requestID: "queued-cancel") == nil)
 
         let expiring = HardeningResult()
-        let shortRequest = try hardeningRequest(id: "queued-deadline", authorization: credential, timeout: 20)
+        let shortRequest = try hardeningRequest("session.resize", id: "queued-deadline", authorization: credential, timeout: 20)
         service.sessionManager.journalLock.lock()
-        DispatchQueue.global().async { expiring.store(service.handle(shortRequest)) }
+        Thread.detachNewThread { expiring.store(service.handle(shortRequest)) }
         let expired = expiring.done.wait(timeout: .now() + 3)
         service.sessionManager.journalLock.unlock()
         #expect(expired == .success)

@@ -29,6 +29,7 @@ struct ShellView: View {
     @State private var toast: SmthzToastMessage?
     @State private var overlay: Surface?
     @State private var palette = SmthzJumpPaletteModel()
+    @State private var catalog = WorkspaceCatalogModel()
     @State private var confirmations = SmthzCloseConfirmationCoordinator()
     @State private var quickCommandsOpen = false
     @State private var renameID: String?
@@ -60,9 +61,8 @@ struct ShellView: View {
         .environment(\.openShellSettings, { openSettings("appearance") })
         .environment(\.smthzShellActions, SmthzShellActions(canPerform: canPerform, perform: perform))
         .focusedSceneValue(\.smthzShellActions, SmthzShellActions(canPerform: canPerform, perform: perform))
-        .environment(\.smthzProjectActions, ["Local host": SmthzProjectActions(
-            createWorkspace: { overlay = .newWorkspace })])
-        .environment(\.smthzWorkspaceDirectories, model.rootURL.map { ["default": $0] } ?? [:])
+        .environment(\.smthzProjectActions, projectActions)
+        .environment(\.smthzWorkspaceDirectories, workspaceDirectories)
         .environment(\.smthzWorkspaceActions, ["default": SmthzWorkspaceActions(
             rename: { model.workspaceTitle = $0 }, setPinned: { model.workspacePinned = $0 },
             setUnread: { model.workspaceUnread = $0 }, delete: { overlay = .deleteWorkspace })])
@@ -76,6 +76,7 @@ struct ShellView: View {
         .background(WindowChrome()).ignoresSafeArea().tint(SmthzTheme.foreground)
         .allowsWindowActivationEvents()
         .task(id: monitorGeneration) { await model.observeHost() }
+        .task(id: monitorGeneration) { await catalog.observe() }
         .onChange(of: model.actionError) { _, message in
             if let message { toast = SmthzToastMessage(title: "Terminal action failed", description: message, kind: .error); model.actionError = nil }
         }
@@ -107,7 +108,7 @@ struct ShellView: View {
             SidebarView(destination: appModel.destination, projects: projects,
                 canCreateWorkspace: model.hostIsRunning && !model.creatingShell,
                 onSelectDestination: { appModel.destination = $0 }, onSearch: showJump,
-                onSelectWorkspace: { _ in appModel.destination = .workspaces },
+                onSelectWorkspace: selectWorkspace,
                 onNewWorkspace: { overlay = .newWorkspace }, onAddProject: { overlay = .addProject },
                 onOpenSettings: { openSettings("appearance") },
                 onScrollToCurrent: { appModel.destination = .workspaces },
@@ -117,13 +118,75 @@ struct ShellView: View {
                 onCheckForUpdates: { unavailable("Update checking") })
         }.background(SmthzTheme.worktreeSidebar)
     }
+    /// "Local host" keeps the default workspace; each registered project lists its main checkout
+    /// (and linked worktrees once WP-M4-WORKTREE-HOST lands); project groups list folder workspaces.
     private var projects: [SidebarProject] {
-        let count = model.workspace.panes.values.filter { $0.binding != nil }.count
-        let card = WorkspaceCardData(id: "default", title: model.workspaceTitle,
+        let count = model.sessionCount(.home)
+        let card = WorkspaceCardData(id: "default", title: model.state.workspaces[.home]?.displayName == "Home" ? "Default workspace"
+                                        : model.state.workspaces[.home]?.displayName ?? "Default workspace",
             detail: count == 1 ? "1 session" : "\(count) sessions", status: count > 0 ? .live : .idle,
-            isActive: appModel.destination == .workspaces, isUnread: model.workspaceUnread,
-            isPinned: model.workspacePinned, isSleeping: !model.hostIsRunning, directory: model.rootURL)
+            isActive: appModel.destination == .workspaces && model.activeKey == .home, isUnread: model.workspaceUnread,
+            isPinned: model.workspacePinned, isSleeping: !model.hostIsRunning, directory: model.activeKey == .home ? model.rootURL : nil)
+        let groupNames = Dictionary(uniqueKeysWithValues: catalog.groups.map { ($0.id, $0.name) })
         return [SidebarProject(id: "local", title: "Local host", subtitle: nil, workspaces: [card])]
+            + catalog.projects.map { project in
+                SidebarProject(id: project.id, title: project.title, subtitle: project.groupID.flatMap { groupNames[$0] },
+                               workspaces: project.workspaces.map(card(for:)))
+            }
+            + catalog.groups.filter { !$0.folders.isEmpty }.map { group in
+                SidebarProject(id: "group:" + group.id, title: group.name, subtitle: "Folders", workspaces: group.folders.map(card(for:)))
+            }
+    }
+    private func card(for workspace: WorkspaceCatalogModel.Workspace) -> WorkspaceCardData {
+        let count = model.sessionCount(workspace.key)
+        return WorkspaceCardData(id: workspace.id, title: workspace.title,
+            detail: count == 1 ? "1 session" : "\(count) sessions", status: count > 0 ? .live : .idle,
+            isActive: appModel.destination == .workspaces && model.activeKey == workspace.key,
+            isUnread: workspace.isUnread, isPinned: workspace.isPinned, isSleeping: !model.hostIsRunning,
+            directory: URL(fileURLWithPath: workspace.path, isDirectory: true),
+            isPrimary: workspace.isMain, isFolder: workspace.isFolder)
+    }
+    private var workspaceDirectories: [String: URL] {
+        var result = Dictionary(catalog.allWorkspaces.map { ($0.id, URL(fileURLWithPath: $0.path, isDirectory: true)) },
+                                uniquingKeysWith: { a, _ in a })
+        if model.activeKey == .home, let root = model.rootURL { result["default"] = root }
+        return result
+    }
+    /// Keyed by project title (the header's lookup key).
+    private var projectActions: [String: SmthzProjectActions] {
+        var result: [String: SmthzProjectActions] = ["Local host": SmthzProjectActions(createWorkspace: {
+            selectWorkspace("default"); overlay = .newWorkspace })]
+        for project in catalog.projects {
+            result[project.title] = SmthzProjectActions(
+                remove: { removeProject(project) },
+                createWorkspace: project.workspaces.first.map { main in { selectWorkspace(main.id); overlay = .newWorkspace } })
+        }
+        return result
+    }
+    /// Switching cards swaps the tab strip, panes and the right sidebar root; an empty project workspace opens a shell there.
+    private func selectWorkspace(_ id: String) {
+        appModel.destination = .workspaces
+        if id == "default" {
+            model.activateWorkspace(.home, displayName: model.state.workspaces[.home]?.displayName ?? "Default workspace", rootPath: nil)
+            return
+        }
+        guard let workspace = catalog.workspace(WorkspaceKey(rawValue: id)) else { return }
+        model.activateWorkspace(workspace.key, displayName: workspace.title, rootPath: workspace.path)
+        if model.workspace.tabs.isEmpty, model.hostIsRunning { Task { await model.newShell() } }
+    }
+    private func removeProject(_ project: WorkspaceCatalogModel.Project) {
+        Task {
+            do {
+                try await catalog.removeRepo(project.id)
+                if catalog.project(containing: model.activeKey) == nil, model.activeKey != .home,
+                   model.activeKey.rawValue.hasPrefix("worktree:") { selectWorkspace("default") }
+                toast = SmthzToastMessage(title: "Project removed", description: "\(project.title) was removed from smthz. No files were deleted.", kind: .info)
+            } catch let failure as WorkspaceCatalogModel.HostFailure where failure.code == "hasLiveSessions" {
+                toast = SmthzToastMessage(title: "Project has running terminals", description: "Close the terminals inside \(project.title) first.", kind: .error)
+            } catch {
+                toast = SmthzToastMessage(title: "Could not remove project", description: error.localizedDescription, kind: .error)
+            }
+        }
     }
     private var tabs: some View {
         TabStripView(tabs: model.tabs, select: select, close: close,
@@ -170,7 +233,7 @@ struct ShellView: View {
                 LayoutSplitView(model: model, close: closePane)
                     .accessibilityLabel("Terminal panes")
             } else {
-                LandingView(hasProjects: false, bindings: SmthzKeybindings.shared.registry, onAddProject: { overlay = .addProject },
+                LandingView(hasProjects: !catalog.projects.isEmpty, bindings: SmthzKeybindings.shared.registry, onAddProject: { overlay = .addProject },
                             onCreateWorkspace: { overlay = .newWorkspace })
             }
         }
@@ -183,7 +246,9 @@ struct ShellView: View {
             case .newWorkspace:
                 modal { SmthzNewWorkspaceComposer(onDismiss: dismiss, onAddProject: { self.overlay = .addProject },
                     onCreateShell: newShell, onAgentSettings: { dismiss(); openSettings("agents") }) }
-            case .addProject: modal { SmthzAddProjectDialog(onDismiss: dismiss) }
+            case .addProject:
+                modal { SmthzAddProjectDialog(catalog: catalog, onDismiss: dismiss, onAdded: { key in
+                    if let key { selectWorkspace(key.rawValue) } }) }
             case .deleteWorkspace:
                 modal { SmthzDeleteWorkspaceDialog(targets: [.init(id: "default", name: model.workspaceTitle, path: model.rootURL?.path)],
                     onCancel: dismiss, onConfirm: { _ in dismiss(); unavailable("Workspace deletion") }) }

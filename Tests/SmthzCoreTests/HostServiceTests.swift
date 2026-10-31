@@ -47,9 +47,7 @@ private func hostBody(_ response: Data) throws -> HostBody {
     #expect(envelope.version == 1)
     #expect(envelope.requestID == "ping-id")
     #expect(envelope.method == "ping")
-    let entry = try #require(try journal.entry(requestID: "ping-id"))
-    #expect(entry.kind == "response:ping")
-    #expect(entry.payload == response)
+    #expect(try journal.entry(requestID: "ping-id") == nil)
 }
 
 @Test func hostVersion() throws {
@@ -112,13 +110,16 @@ private func hostBody(_ response: Data) throws -> HostBody {
     defer { fixture.cleanup() }
     let journal = try fixture.journal()
     let service = HostService(journal: journal, hostIdentity: nil)
-    let request = try hostRequest("ping")
+    let request = try hostRequest("session.resize")
     let first = service.handleAuthenticatedTestRequest(request)
     #expect(service.handleAuthenticatedTestRequest(request) == first)
     #expect(try journal.read(after: 0, limit: 10).count == 1)
+    let entry = try #require(try journal.entry(requestID: "r1"))
+    #expect(entry.kind == "response:session.resize")
+    #expect(entry.payload == first)
     // A reused ID must match both method and canonical parameters.
-    #expect(try hostBody(service.handleAuthenticatedTestRequest(hostRequest("version"))).error == "idempotencyConflict")
-    #expect(try hostBody(service.handleAuthenticatedTestRequest(hostRequest("ping", version: 2))).error == "protocolVersionMismatch")
+    #expect(try hostBody(service.handleAuthenticatedTestRequest(hostRequest("session.close"))).error == "idempotencyConflict")
+    #expect(try hostBody(service.handleAuthenticatedTestRequest(hostRequest("session.resize", version: 2))).error == "protocolVersionMismatch")
     let reopened = HostService(journal: try EventJournal(path: fixture.journalPath), hostIdentity: nil)
     #expect(reopened.handleAuthenticatedTestRequest(request) == first)
 }
@@ -128,8 +129,8 @@ private func hostBody(_ response: Data) throws -> HostBody {
     defer { fixture.cleanup() }
     let journal = try fixture.journal()
     let service = HostService(journal: journal, hostIdentity: nil)
-    _ = service.handleAuthenticatedTestRequest(try hostRequest("ping", id: "first"))
-    _ = service.handleAuthenticatedTestRequest(try hostRequest("ping", id: "second"))
+    _ = service.handleAuthenticatedTestRequest(try hostRequest("session.resize", id: "first"))
+    _ = service.handleAuthenticatedTestRequest(try hostRequest("session.resize", id: "second"))
     #expect(try journal.read(after: 0, limit: 10).map(\.requestID) == ["first", "second"])
 }
 
@@ -138,7 +139,7 @@ private func hostBody(_ response: Data) throws -> HostBody {
     defer { fixture.cleanup() }
     let journal = try fixture.journal()
     let service = HostService(journal: journal, hostIdentity: nil)
-    let request = try hostRequest("ping")
+    let request = try hostRequest("session.resize")
     let results = await withTaskGroup(of: Data.self, returning: [Data].self) { group in
         for _ in 0..<20 { group.addTask { service.handleAuthenticatedTestRequest(request) } }
         var results: [Data] = []
@@ -160,13 +161,13 @@ private func hostBody(_ response: Data) throws -> HostBody {
     defer { sqlite3_close(db) }
     // Make append fail while lookup still succeeds.
     #expect(sqlite3_exec(db, "CREATE TRIGGER reject_insert BEFORE INSERT ON events BEGIN SELECT RAISE(FAIL, 'rejected'); END;", nil, nil, nil) == SQLITE_OK)
-    let appendFailure = try hostBody(service.handleAuthenticatedTestRequest(hostRequest("ping")))
+    let appendFailure = try hostBody(service.handleAuthenticatedTestRequest(hostRequest("session.resize")))
     #expect(!appendFailure.ok)
     #expect(appendFailure.error == "journalFailure")
     #expect(try journal.entry(requestID: "r1") == nil)
     // Make lookup fail as well.
     #expect(sqlite3_exec(db, "DROP TABLE events;", nil, nil, nil) == SQLITE_OK)
-    let lookupFailure = try hostBody(service.handleAuthenticatedTestRequest(hostRequest("ping")))
+    let lookupFailure = try hostBody(service.handleAuthenticatedTestRequest(hostRequest("session.resize")))
     #expect(!lookupFailure.ok)
     #expect(lookupFailure.error == "journalFailure")
 }
@@ -186,7 +187,7 @@ private func hostBody(_ response: Data) throws -> HostBody {
     #expect(body.ok)
     #expect(body.result == "pong")
     #expect(try client.request(request) == response)
-    #expect(try journal.read(after: 0, limit: 10).count == 1)
+    #expect(try journal.read(after: 0, limit: 10).isEmpty)
     server.stop()
     #expect(!FileManager.default.fileExists(atPath: fixture.socketPath))
 }

@@ -32,6 +32,11 @@ private actor TerminalTransport {
         try perform { $0.subscribe(id: id, fromCursor: cursor) }
     }
 
+    /// The absolute end of the session log: a read past the end is clamped to it.
+    func end(id: String) throws -> UInt64 {
+        try perform { try $0.read(id: id, from: UInt64(Int64.max), maxBytes: 1).next }
+    }
+
     func write(id: String, data: Data) throws { try perform { _ = try $0.write(id: id, data: data) } }
 
     func resize(id: String, rows: Int, cols: Int) throws {
@@ -66,7 +71,16 @@ private final class FocusingTerminalView: TerminalView {
     var clearScreen: (() -> Void)?
     var makeContextMenu: (() -> NSMenu)?
     var onFocus: (() -> Void)?
+    /// Set only while replayed log bytes are parsed (synchronously, on the main thread). The
+    /// emulator then answers queries (DA, DSR, DECRQM) that a program asked long ago; those
+    /// answers must not reach the shell, where they would show up as typed text.
+    nonisolated(unsafe) var dropTerminalReplies = false
     private var shortcutMonitor: Any?
+
+    nonisolated override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        if dropTerminalReplies { return }
+        super.send(source: source, data: data)
+    }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor); self.shortcutMonitor = nil }
@@ -133,6 +147,10 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     var onExit: (ProcessExitFacts) -> Void = { _ in }
     var onPaneAction: (SmthzTerminalContextMenu.Action) -> Void = { _ in }
     private var cursor: UInt64 = 0
+    /// Log offset where history ends and live output begins for this emulator.
+    private var replayEnd: UInt64 = 0
+    /// Replayed frames whose deferred delegate callbacks (OSC 52) are still queued on main.
+    private var replayCallbacksPending = 0
     private var inputWritten = false
     private var outputReceived = false
     private var spawnedFresh = false
@@ -146,6 +164,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     private let commandSink: AsyncStream<TerminalCommand>.Continuation
     private var outputTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
+    private var inputSourceObserver: NSObjectProtocol?
 
     init(sessionID: String, socketPath: String, fontSize: CGFloat, initialGrid: PaneGrid? = nil) {
         self.sessionID = sessionID
@@ -159,7 +178,13 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
             view.resize(cols: initialGrid.cols, rows: initialGrid.rows)
         }
         view.terminalDelegate = self
-        view.optionAsMetaKey = true
+        view.optionAsMetaKey = TerminalOptionKey.sendsAlt()
+        // "auto" follows the input source: switching to a composing layout or IME frees Option.
+        inputSourceObserver = NotificationCenter.default.addObserver(
+            forName: NSTextInputContext.keyboardSelectionDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.view.optionAsMetaKey = TerminalOptionKey.sendsAlt() }
+        }
         if let terminal = view as? FocusingTerminalView {
             terminal.onFocus = { [weak self] in self?.onFocus() }
             terminal.showFind = { [weak self] in self?.showingFind = true }
@@ -213,6 +238,11 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
             while !Task.isCancelled {
                 do {
                     guard let cursor = self?.cursor else { return }
+                    if cursor == 0 {
+                        // A fresh emulator first replays history; note where it ends.
+                        let end = (try? await transport.end(id: id)) ?? 0
+                        self?.replayEnd = end
+                    }
                     let stream = try await transport.subscribe(id: id, from: cursor)
                     for try await result in stream {
                         guard !Task.isCancelled, let self else { return }
@@ -223,7 +253,7 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
                         }
                         if !result.data.isEmpty {
                             self.outputReceived = true
-                            self.view.feed(byteArray: ArraySlice(result.data))
+                            self.feed(result.data, replaying: self.cursor < self.replayEnd)
                         }
                         // Advance only after the emulator consumed this frame. A failed
                         // bounded stream resubscribes here without gaps or duplicates.
@@ -245,6 +275,20 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
                 }
             }
         }
+    }
+
+    private func feed(_ data: Data, replaying: Bool) {
+        guard replaying, let terminal = view as? FocusingTerminalView else {
+            view.feed(byteArray: ArraySlice(data))
+            return
+        }
+        terminal.dropTerminalReplies = true
+        view.feed(byteArray: ArraySlice(data))
+        terminal.dropTerminalReplies = false
+        // SwiftTerm queues OSC 52 callbacks on the main queue during the feed; this block runs
+        // after them, so the clipboard gate sees them as replayed.
+        replayCallbacksPending += 1
+        DispatchQueue.main.async { [weak self] in self?.replayCallbacksPending -= 1 }
     }
 
     func clearScreen() {
@@ -306,6 +350,8 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
         pause()
         commandTask?.cancel()
         commandSink.finish()
+        if let inputSourceObserver { NotificationCenter.default.removeObserver(inputSourceObserver) }
+        inputSourceObserver = nil
         let transport = transport
         Task { await transport.close() }
     }
@@ -353,10 +399,18 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
     }
 
     nonisolated func clipboardCopy(source: TerminalView, content: Data) {
-        guard let text = String(data: content, encoding: .utf8) else { return }
+        // Checked synchronously: a hop would run after the replay fence has drained.
+        let allowed = MainActor.assumeIsolated {
+            TerminalClipboardPolicy.allowsWrite(settingEnabled: TerminalClipboardPolicy.writesEnabled(),
+                replaying: replayCallbacksPending > 0, byteCount: content.count)
+        }
+        guard allowed, let text = String(data: content, encoding: .utf8) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+
+    /// OSC 52 reads are never answered (see TerminalClipboardPolicy).
+    nonisolated func clipboardRead(source: TerminalView) -> Data? { nil }
 }
 
 /// Hosts the terminal inset by the theme padding on a theme-coloured background, and follows the
@@ -364,6 +418,15 @@ final class TerminalSessionController: NSObject, ObservableObject, TerminalViewD
 final class TerminalContainerView: NSView {
     let terminal: TerminalView
     var wasActive = false
+    /// Focus asked for before the view reached a window (a tab's first pane); granted on arrival.
+    var wantsFocus = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard wantsFocus, let window else { return }
+        wantsFocus = false
+        window.makeFirstResponder(terminal)
+    }
 
     init(terminal: TerminalView) {
         self.terminal = terminal
@@ -530,8 +593,9 @@ private struct SmthzTerminalSurface: NSViewRepresentable {
         if visible { controller.resume() } else { controller.pause() }
         if visible && isActive && !container.wasActive {
             DispatchQueue.main.async { [weak container] in
-                guard let container, container.window != nil else { return }
-                container.window?.makeFirstResponder(container.terminal)
+                guard let container else { return }
+                guard let window = container.window else { container.wantsFocus = true; return }
+                window.makeFirstResponder(container.terminal)
             }
         }
         container.wasActive = visible && isActive

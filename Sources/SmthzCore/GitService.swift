@@ -8,6 +8,7 @@ public enum GitError: Error, Equatable, Sendable {
     case commandFailed(code: Int32, stderr: String)
     case timedOut
     case cancelled
+    case authenticationRequired(String)
     case malformedOutput
 }
 
@@ -51,9 +52,26 @@ public struct GitWorktree: Equatable, Sendable {
     public let prunableReason: String?
 }
 
-/// Executes only /usr/bin/git, without a shell, pager, interactive prompts, or hooks.
+/// Executes /usr/bin/git without a pager or prompts. Read calls isolate config;
+/// userContext writes preserve user identity, credential helpers, and hooks.
 /// Each call runs off the caller's executor. Cancellation and timeout kill and reap Git.
 /// Paths returned by Git must be UTF-8; undecodable output is a typed error.
+public enum GitRunMode: Sendable { case isolatedRead, userContext }
+
+public struct GitProgress: Equatable, Sendable {
+    public let phase: String
+    public let done: Int
+    public let total: Int
+    public static func parse(_ line: String) -> GitProgress? {
+        guard let regex = try? NSRegularExpression(pattern: #"(Updating files|Receiving objects|Resolving deltas):\s*\d+%\s*\((\d+)/(\d+)\)"#),
+              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+              let phase = Range(match.range(at: 1), in: line),
+              let done = Range(match.range(at: 2), in: line), let total = Range(match.range(at: 3), in: line),
+              let d = Int(line[done]), let t = Int(line[total]) else { return nil }
+        return GitProgress(phase: String(line[phase]), done: d, total: t)
+    }
+}
+
 public struct GitService: Sendable {
     public let timeout: TimeInterval
 
@@ -124,14 +142,14 @@ public struct GitService: Sendable {
         if detached { args.append("--detach") }
         args += ["--", path.path]
         if let branch { try Self.validateRef(branch); args.append(branch) }
-        _ = try await execute(args, at: directory)
+        _ = try await run(args, at: directory)
     }
 
     public func removeWorktree(at directory: URL, path: URL, force: Bool = false) async throws {
         try Self.validatePath(path)
         var args = ["worktree", "remove"]
         if force { args.append("--force") }
-        _ = try await execute(args + ["--", path.path], at: directory)
+        _ = try await run(args + ["--", path.path], at: directory)
     }
 
     /// Tracked working-tree changes by default, or staged changes when `staged` is true.
@@ -190,7 +208,27 @@ public struct GitService: Sendable {
         guard path.isFileURL, !path.path.utf8.contains(0) else { throw GitError.invalidInput("directory") }
     }
 
-    private struct Output: Sendable { let stdout: String; let stderr: String; let code: Int32 }
+    public struct Output: Sendable { public let stdout: String; public let stderr: String; public let code: Int32 }
+
+    /// Writes have no deadline unless the caller explicitly supplies one.
+    public func run(_ arguments: [String], at directory: URL, mode: GitRunMode = .userContext,
+                    timeout: TimeInterval? = nil, stdin: Data? = nil,
+                    environment: [String: String]? = nil, control: GitProcessControl = GitProcessControl(),
+                    stderr: (@Sendable (String) -> Void)? = nil,
+                    progress: (@Sendable (GitProgress) -> Void)? = nil,
+                    allowFailure: Bool = false) async throws -> Output {
+        try Self.validatePath(directory)
+        if let timeout { guard timeout.isFinite, timeout > 0, timeout <= 86_400 else { throw GitError.invalidInput("timeout") } }
+        guard arguments.allSatisfy({ !$0.utf8.contains(0) }) else { throw GitError.invalidInput("arguments") }
+        return try await withTaskCancellationHandler {
+            if Task.isCancelled { throw GitError.cancelled }
+            return try await Task.detached {
+                try Self.runBlocking(arguments, at: directory, timeout: timeout, control: control,
+                    allowFailure: allowFailure, mode: mode, input: stdin, environment: environment,
+                    onStderr: stderr, progress: progress)
+            }.value
+        } onCancel: { control.cancel() }
+    }
 
     private func execute(_ arguments: [String], at directory: URL, allowFailure: Bool = false) async throws -> Output {
         try Self.validatePath(directory)
@@ -204,8 +242,11 @@ public struct GitService: Sendable {
         } onCancel: { control.cancel() }
     }
 
-    private static func runBlocking(_ arguments: [String], at directory: URL, timeout: TimeInterval,
-                                    control: GitProcessControl, allowFailure: Bool) throws -> Output {
+    private static func runBlocking(_ arguments: [String], at directory: URL, timeout: TimeInterval?,
+                                    control: GitProcessControl, allowFailure: Bool, mode: GitRunMode = .isolatedRead,
+                                    input: Data? = nil, environment suppliedEnvironment: [String: String]? = nil,
+                                    onStderr: (@Sendable (String) -> Void)? = nil,
+                                    progress: (@Sendable (GitProgress) -> Void)? = nil) throws -> Output {
         // Regular files avoid pipe capacity deadlocks and inherited-pipe EOF hangs.
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("smthz-git-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false,
@@ -221,26 +262,67 @@ public struct GitService: Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.currentDirectoryURL = directory
-        process.arguments = ["--no-pager", "--literal-pathspecs", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] + arguments
-        var environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("GIT_") }
+        process.arguments = ["--no-pager", "--literal-pathspecs", "-c", "core.fsmonitor=false"]
+            + (mode == .isolatedRead ? ["-c", "core.hooksPath=/dev/null"] : []) + arguments
+        var environment = suppliedEnvironment ?? ProcessInfo.processInfo.environment
+        if mode == .isolatedRead {
+            environment = environment.filter { !$0.key.hasPrefix("GIT_") }
+            environment["GIT_CONFIG_NOSYSTEM"] = "1"; environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        } else {
+            environment.removeValue(forKey: "GIT_ASKPASS"); environment.removeValue(forKey: "SSH_ASKPASS")
+            if environment["GIT_SSH_COMMAND"] == nil { environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes" }
+        }
         environment["LC_ALL"] = "C"; environment["GIT_TERMINAL_PROMPT"] = "0"
-        environment["GIT_CONFIG_NOSYSTEM"] = "1"; environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
+        var inputHandle: FileHandle?
+        if let input {
+            let inputURL = temporary.appendingPathComponent("stdin")
+            try input.write(to: inputURL)
+            inputHandle = try FileHandle(forReadingFrom: inputURL)
+        }
+        defer { try? inputHandle?.close() }
+        process.standardInput = inputHandle ?? FileHandle.nullDevice
         process.standardOutput = out; process.standardError = err
         let ended = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in ended.signal() }
         try control.start(process)
-        if ended.wait(timeout: .now() + timeout) == .timedOut {
-            control.stop(); process.waitUntilExit()
-            if control.wasCancelled { throw GitError.cancelled }
-            throw GitError.timedOut
+        defer {
+            if process.isRunning { control.stop() }
+            process.waitUntilExit()
         }
+        let reader = try FileHandle(forReadingFrom: errURL)
+        defer { try? reader.close() }
+        var pending = Data()
+        func drain(final: Bool = false) throws {
+            pending.append(try reader.readToEnd() ?? Data())
+            while let end = pending.firstIndex(where: { $0 == 10 || $0 == 13 }) {
+                let line = String(decoding: pending[..<end], as: UTF8.self)
+                pending.removeSubrange(...end)
+                if !line.isEmpty { onStderr?(line); if let p = GitProgress.parse(line) { progress?(p) } }
+            }
+            if final || pending.count > 16_384 {
+                if !pending.isEmpty { onStderr?(String(decoding: pending, as: UTF8.self)) }
+                pending.removeAll(keepingCapacity: true)
+            }
+        }
+        let deadline = timeout.map { Date(timeIntervalSinceNow: $0) }
+        while ended.wait(timeout: .now() + min(timeout ?? 0.01, 0.01)) == .timedOut {
+            try drain()
+            if let deadline, Date() >= deadline {
+                control.stop(); process.waitUntilExit()
+                if control.wasCancelled { throw GitError.cancelled }
+                throw GitError.timedOut
+            }
+        }
+        try drain(final: true)
         process.waitUntilExit()
         if control.wasCancelled { throw GitError.cancelled }
         guard let stdout = String(data: try Data(contentsOf: outURL), encoding: .utf8),
               let stderr = String(data: try Data(contentsOf: errURL), encoding: .utf8) else { throw GitError.malformedOutput }
         if process.terminationStatus != 0 && !allowFailure {
+            if ["could not read Username", "Permission denied (publickey)", "terminal prompts disabled", "Authentication failed"].contains(where: stderr.contains) {
+                throw GitError.authenticationRequired(stderr)
+            }
             if stderr.contains("not a git repository") { throw GitError.notRepository }
             throw GitError.commandFailed(code: process.terminationStatus, stderr: stderr)
         }
@@ -250,11 +332,12 @@ public struct GitService: Sendable {
 }
 
 /// Lock serializes launch with cancellation, including cancellation before launch.
-private final class GitProcessControl: @unchecked Sendable {
+public final class GitProcessControl: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
-    var wasCancelled: Bool { lock.withLock { cancelled } }
+    public init() {}
+    public var wasCancelled: Bool { lock.withLock { cancelled } }
     func start(_ process: Process) throws {
         try lock.withLock {
             guard !cancelled else { throw GitError.cancelled }
@@ -263,8 +346,14 @@ private final class GitProcessControl: @unchecked Sendable {
         }
     }
     func stop() { lock.withLock { killRunning() } }
-    func cancel() { lock.withLock { cancelled = true; killRunning() } }
+    public func cancel() { lock.withLock { cancelled = true; killRunning() } }
     private func killRunning() {
-        if let process, process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+        if let process, process.isRunning {
+            let pid = process.processIdentifier
+            // Foundation Process starts a new process group. Verify ownership
+            // before signalling it, then kill Git as a fallback on other runtimes.
+            if getpgid(pid) == pid { Darwin.kill(-pid, SIGKILL) }
+            else { Darwin.kill(pid, SIGKILL) }
+        }
     }
 }

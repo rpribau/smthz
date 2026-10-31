@@ -79,6 +79,7 @@ struct SettingsView: View {
         switch page.id {
         case "terminal": TerminalSettingsPane(model: model)
         case "appearance": AppearancePane(sidebarOpen: $sidebarOpen, rightSidebarOpen: $rightSidebarOpen)
+        case "shortcuts": ShortcutsPane(settingsSearch: search)
         default: SettingsUnavailableBody()
         }
     }

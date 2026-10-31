@@ -59,15 +59,24 @@ do {
                                                withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
     }
+    let store = try WorkspaceStore(path: directory.appendingPathComponent("workspace.sqlite").path)
+    try store.reconcileAfterRestart()
+    let router = HostRouter()
+    WorktreeRPC.register(on: router, store: store)
+    GitWriteRPC.register(on: router, store: store)
+    FilesRPC.register(on: router, store: store)
+    CleanupRPC.register(on: router, store: store)
     let journal = try EventJournal(path: journalPath)
     let scrollback = directory.appendingPathComponent("scrollback", isDirectory: true)
     let manager = SessionManager(journal: journal, scrollbackDirectory: scrollback,
                                  scrollbackLimit: 16 * 1_048_576)
+    RepoRPC.register(on: router, store: store,
+                     liveSessionCWDs: { manager.list().filter(\.running).compactMap(\.cwd) })
     signal(SIGINT, SIG_IGN)
     signal(SIGTERM, SIG_IGN)
     let service = HostService(journal: journal, hostIdentity: ProcessIdentity.current(), sessionManager: manager,
                               capabilityTokenPath: HostCapabilityToken.path(socketPath: socketPath),
-                              scrollbackDirectory: scrollback, onShutdown: {
+                              scrollbackDirectory: scrollback, router: router, onShutdown: {
         DispatchQueue.main.async { _ = Darwin.kill(getpid(), SIGTERM) }
     })
     let server = try UnixSocketServer(path: socketPath, handler: { service.handle($0) },

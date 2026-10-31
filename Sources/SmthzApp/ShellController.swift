@@ -44,6 +44,8 @@ private actor ShellEffectExecutor {
 final class ShellController {
     private(set) var state: ShellState
     private(set) var snapshot: HostSnapshot?
+    /// The workspace shown in the main window (`home`, `worktree:<id>` or `folder:<id>`), persisted as the window record.
+    private(set) var activeKey: WorkspaceKey = .home
     var actionError: String?
     var workspacePinned = false
     var workspaceUnread = false
@@ -79,16 +81,44 @@ final class ShellController {
             state.workspaces[.home] = WorkspaceLayout(key: .home, displayName: "Default workspace")
             state.workspaceOrder.append(.home)
         }
+        if let key = state.windows.first?.workspace, state.workspaces[key] != nil { activeKey = key }
         if !report.salvaged.isEmpty || report.backupPath != nil {
             actionError = "Shell state recovered. " + report.salvaged.joined(separator: "; ")
                 + (report.backupPath.map { " Backup: \($0)" } ?? "")
         }
     }
 
-    var workspace: WorkspaceLayout { state.workspaces[.home]! }
+    var workspace: WorkspaceLayout { state.workspaces[activeKey] ?? state.workspaces[.home]! }
     var workspaceTitle: String {
         get { workspace.displayName == "Home" ? "Default workspace" : workspace.displayName }
-        set { _ = apply(.openWorkspace(.home, displayName: newValue, rootPath: workspace.rootPath)) }
+        set { _ = apply(.openWorkspace(activeKey, displayName: newValue, rootPath: workspace.rootPath)) }
+    }
+    /// Opens (or creates) the workspace layout and makes it the window's workspace. Tabs stay per workspace.
+    func activateWorkspace(_ key: WorkspaceKey, displayName: String, rootPath: String?) {
+        if key != .home || state.workspaces[key] == nil || state.workspaces[key]?.rootPath != rootPath {
+            _ = apply(.openWorkspace(key, displayName: displayName, rootPath: rootPath))
+        }
+        guard state.workspaces[key] != nil else { return }
+        activeKey = key
+        let id = state.windows.first?.id ?? WindowID(rawValue: UUID().uuidString)
+        if state.windows.first?.workspace != key {
+            state.windows = [WindowState(id: id, workspace: key)] + state.windows.dropFirst().filter { $0.id != id }
+            scheduleSave()
+        }
+    }
+    /// Number of panes bound to a host session in the given workspace (sidebar card detail).
+    func sessionCount(_ key: WorkspaceKey) -> Int {
+        state.workspaces[key]?.panes.values.filter { $0.binding != nil }.count ?? 0
+    }
+    /// The workspace whose root contains `cwd` most specifically; unattached sessions are adopted there.
+    private func adoptionKey(for cwd: String?) -> WorkspaceKey {
+        guard let cwd else { return .home }
+        let match = state.workspaces.values.compactMap { layout -> (WorkspaceKey, Int)? in
+            guard layout.key != .home, let root = layout.rootPath,
+                  WorkspaceSelectors.contains(root: root, path: cwd) else { return nil }
+            return (layout.key, root.count)
+        }.max { $0.1 < $1.1 }
+        return match?.0 ?? .home
     }
     var sessions: [SessionInfo] { snapshot?.sessions ?? [] }
     private var orderedTabs: [TerminalTabRecord] {
@@ -117,7 +147,7 @@ final class ShellController {
                     case .running(let host, _) = snapshot?.state {
                 // Explicit Resource Manager navigation may reopen an exited record;
                 // background reconciliation only adopts running, unattached sessions.
-                _ = apply(.adoptSession(.home, session, host: host))
+                _ = apply(.adoptSession(activeKey, session, host: host))
             }
         }
     }
@@ -159,11 +189,15 @@ final class ShellController {
         }
         flush()
     }
-    func reopenClosedTab() async { await execute(apply(.reopenClosedTab(.home))) }
-    func cycleTab(forward: Bool) { _ = apply(forward ? .nextTab(.home) : .previousTab(.home)) }
+    func reopenClosedTab() async { await execute(apply(.reopenClosedTab(activeKey))) }
+    func cycleTab(forward: Bool) { _ = apply(forward ? .nextTab(activeKey) : .previousTab(activeKey)) }
 
     func directory(_ id: String) -> String? { directories[id] ?? sessions.first { $0.id == id }?.cwd ?? tab(id)?.startupCwd }
-    var rootURL: URL? { selectedSessionID.flatMap { directory($0) }.map { URL(fileURLWithPath: $0) } }
+    /// Project workspaces root the Explorer/Source Control/Go to File at their folder; the default workspace follows the terminal.
+    var rootURL: URL? {
+        if activeKey != .home, let root = workspace.rootPath { return URL(fileURLWithPath: root, isDirectory: true) }
+        return selectedSessionID.flatMap { directory($0) }.map { URL(fileURLWithPath: $0) }
+    }
     func rename(_ id: String, title: String?) { if let tab = tab(id) { _ = apply(.renameTab(tab.id, title)) } }
     func oscTitle(_ id: String, title: String) {
         if let pane = workspace.panes.values.first(where: { $0.binding?.sessionID == id }) {
@@ -179,11 +213,12 @@ final class ShellController {
         _ = apply(.activateTab(tab)); _ = apply(.focusPane(tab, pane))
     }
     func paneDirectory(_ pane: PaneID, path: String?) {
-        guard let path, var record = workspace.panes[pane] else { return }
+        guard let path, let key = state.workspaces.first(where: { $0.value.panes[pane] != nil })?.key,
+              var record = state.workspaces[key]?.panes[pane] else { return }
         if let session = record.binding?.sessionID { directories[session] = path }
         guard record.startupCwd != path else { return }
         record.startupCwd = path
-        state.workspaces[.home]?.panes[pane] = record
+        state.workspaces[key]?.panes[pane] = record
         scheduleSave()
     }
     func split(_ tab: TabID, pane: PaneID, side: PaneSide) async {
@@ -273,13 +308,13 @@ final class ShellController {
         return true
     }
     private func start(_ id: PaneID) async {
-        guard !starting.contains(id), var pane = workspace.panes[id], pane.binding == nil,
+        guard !starting.contains(id), var pane = anyPane(id), pane.binding == nil,
               case .running(let host, _) = snapshot?.state else { return }
         starting.insert(id)
         defer { starting.remove(id) }
         if pane.pendingCreateRequestID == nil {
             _ = apply(.paneStarting(id, requestID: .generate()))
-            pane = workspace.panes[id]!
+            pane = anyPane(id)!
         }
         let requestID = pane.pendingCreateRequestID!
         let recordURL = stateURL.deletingLastPathComponent().appendingPathComponent(
@@ -301,7 +336,7 @@ final class ShellController {
             }
             guard flush() else { return }
             let created = try await executor.create(requestID: requestID, parameters: parameters)
-            guard workspace.panes[id] != nil else { try? await executor.close(created.id); return }
+            guard anyPane(id) != nil else { try? await executor.close(created.id); return }
             _ = apply(.bindSession(id, Self.binding(created, host: host)))
             awaitingSnapshot[created.id] = Date()
             if let snapshot { self.snapshot = HostSnapshot(state: snapshot.state,
@@ -313,6 +348,8 @@ final class ShellController {
             restartParameters.removeValue(forKey: id)
         } catch { actionError = "Could not start terminal: \(error)" }
     }
+    /// Panes of every workspace: background workspaces restore and reconcile while hidden.
+    private func anyPane(_ id: PaneID) -> PaneRecord? { state.workspaces.values.lazy.compactMap { $0.panes[id] }.first }
     private func restartURL(_ pane: PaneID) -> URL {
         let name = Data(pane.rawValue.utf8).base64EncodedString().replacingOccurrences(of: "/", with: "_")
         return stateURL.deletingLastPathComponent().appendingPathComponent("shell-restart-" + name + ".json")
@@ -330,8 +367,8 @@ final class ShellController {
         guard hostIsRunning, !creatingShell else { return }
         creatingShell = true
         defer { creatingShell = false }
-        let effects = apply(.createTab(.home, group: nil,
-            cwd: FileManager.default.homeDirectoryForCurrentUser.path, title: nil))
+        let effects = apply(.createTab(activeKey, group: nil,
+            cwd: workspace.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.path, title: nil))
         if let size = TerminalSizeHint.latest {
             for pane in effects.startPanes { _ = apply(.setPaneGrid(pane, cols: size.cols, rows: size.rows)) }
         }
@@ -391,14 +428,15 @@ final class ShellController {
             _ = apply(.hostIncarnationChanged(host))
             // Recover an interrupted create before adopting unattached sessions. Idempotency
             // returns the original host session even if the reply was lost before app termination.
-            for pane in workspace.panes.values where pane.pendingCreateRequestID != nil || pane.state == .unstarted {
+            let allPanes = state.workspaces.values.flatMap(\.panes.values)
+            for pane in allPanes where pane.pendingCreateRequestID != nil || pane.state == .unstarted {
                 await start(pane.id)
             }
             guard starting.isEmpty else { continue }
             retiredSessions = retiredSessions.filter { id in value.sessions.contains { $0.id == id && $0.running } }
             let live = Set(value.sessions.map(\.id))
             awaitingSnapshot = awaitingSnapshot.filter { !live.contains($0.key) && Date().timeIntervalSince($0.value) < 10 }
-            for pane in workspace.panes.values {
+            for pane in state.workspaces.values.flatMap(\.panes.values) {
                 if let binding = pane.binding, !live.contains(binding.sessionID),
                    !stopping.contains(binding.sessionID), awaitingSnapshot[binding.sessionID] == nil,
                    !(snapshot?.sessions.contains { $0.id == binding.sessionID } ?? false) {
@@ -406,10 +444,10 @@ final class ShellController {
                         inputWritten: false, outputReceived: false, tabHadPaneAtConnect: true, attachAbsent: true)))
                 }
             }
-            let attached = Set(workspace.panes.values.compactMap { $0.binding?.sessionID })
+            let attached = Set(state.workspaces.values.flatMap(\.panes.values).compactMap { $0.binding?.sessionID })
             let selected = selectedSessionID
             for session in value.sessions where session.running && !attached.contains(session.id) && !stopping.contains(session.id) && !retiredSessions.contains(session.id) {
-                _ = apply(.adoptSession(.home, session, host: host))
+                _ = apply(.adoptSession(adoptionKey(for: session.cwd), session, host: host))
             }
             if let selected, selectedSessionID != selected, visibleIDs.contains(selected) { selectedSessionID = selected }
         }

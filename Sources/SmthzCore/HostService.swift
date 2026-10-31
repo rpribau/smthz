@@ -56,6 +56,8 @@ public enum HostCapabilityToken {
 }
 
 public final class HostService: @unchecked Sendable {
+    public let router: HostRouter
+    private let routedRequests = HostRepoGate()
     private let journal: EventJournal
     public let sessionManager: SessionManager
     private let hostIdentity: ProcessIdentity?
@@ -75,19 +77,28 @@ public final class HostService: @unchecked Sendable {
 
     private final class Control: @unchecked Sendable {
         let requestID: String
+        let processControl = GitProcessControl()
         let deadline: DispatchTime
+        private let deadlineTimer: DispatchSourceTimer
         private let lock = NSLock()
         private var cancelled = false
         init(requestID: String, milliseconds: Int) {
             self.requestID = requestID
             deadline = .now() + .milliseconds(milliseconds)
+            deadlineTimer = DispatchSource.makeTimerSource(queue: .global())
+            deadlineTimer.schedule(deadline: deadline)
+            deadlineTimer.setEventHandler { [processControl] in processControl.cancel() }
+            deadlineTimer.resume()
         }
-        func cancel() { lock.withLock { cancelled = true } }
+        deinit { deadlineTimer.cancel() }
+        func cancel() { lock.withLock { cancelled = true }; processControl.cancel() }
         var error: String? {
-            lock.withLock {
+            let result: String? = lock.withLock {
                 if cancelled { return "cancelled" }
                 return DispatchTime.now() >= deadline ? "deadlineExceeded" : nil
             }
+            if result != nil { processControl.cancel() }
+            return result
         }
     }
     // Serialize lookup, execution, and append across concurrent socket clients.
@@ -100,7 +111,8 @@ public final class HostService: @unchecked Sendable {
 
     public init(journal: EventJournal, hostIdentity: ProcessIdentity?, sessionManager: SessionManager? = nil, capabilityTokenPath: String? = nil,
                 hostEnvironment: [String: String] = ProcessInfo.processInfo.environment,
-                scrollbackDirectory: URL? = nil, onShutdown: (@Sendable () -> Void)? = nil) {
+                scrollbackDirectory: URL? = nil, router: HostRouter = HostRouter(), onShutdown: (@Sendable () -> Void)? = nil) {
+        self.router = router
         self.scrollbackDirectory = scrollbackDirectory
         self.onShutdown = onShutdown
         self.hostEnvironment = hostEnvironment
@@ -220,24 +232,49 @@ public final class HostService: @unchecked Sendable {
         }
         guard admitted else { return response(to: request, body: Body(ok: false, error: "limitExceeded")) }
         defer { _ = stateLock.withLock { active.removeValue(forKey: ticket) } }
+        let route = router.route(request.method)
+        let isRead = route?.methodClass == .read || ["ping", "version", "host.identity", "session.list", "session.read", "session.replay", "session.foreground"].contains(request.method)
+        if isRead { return handleAdmitted(request, control: control) }
+        do {
+            return try routedRequests.withGate(request.requestID, cancellation: { control.error }) {
+                handleAdmitted(request, control: control)
+            }
+        } catch { return routedError(request, error: error) }
+    }
+
+    private func handleAdmitted(_ request: RPCEnvelope, control: Control) -> Data {
+        if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
+        guard !stateLock.withLock({ stopped }) else { return response(to: request, body: Body(ok: false, error: "hostStopping")) }
+        if let route = router.route(request.method) {
+            return routedResponse(request, route: route, control: control)
+        }
+        // Live reads never queue behind the host's mutation or journal locks.
+        if ["ping", "version", "host.identity", "session.list", "session.read", "session.replay", "session.foreground"].contains(request.method) {
+            switch request.method {
+            case "ping": return response(to: request, body: Body(ok: true, result: "pong"))
+            case "version": return response(to: request, body: Body(ok: true, result: ApplicationIdentity.version))
+            case "host.identity":
+                guard let identity = hostIdentity else { return response(to: request, body: Body(ok: false, error: "identityUnavailable")) }
+                return response(to: request, body: Body(ok: true, pid: identity.pid, startSeconds: identity.startSeconds, startMicroseconds: identity.startMicroseconds))
+            default: return response(to: request, body: sessionResponse(request, control: control))
+            }
+        }
+        guard ["session.create", "session.write", "session.resize", "session.close", "host.shutdown"].contains(request.method) else {
+            return response(to: request, body: Body(ok: false, error: "unknownMethod"))
+        }
         // Cancellable lock acquisition bounds queue wait without dispatching detached work.
         while !lock.try() {
             if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
             Thread.sleep(forTimeInterval: 0.001)
         }
         defer { lock.unlock() }
-        guard !stopped else { return response(to: request, body: Body(ok: false, error: "hostStopping")) }
+        guard !stateLock.withLock({ stopped }) else { return response(to: request, body: Body(ok: false, error: "hostStopping")) }
         while !sessionManager.journalLock.try() {
             if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
             Thread.sleep(forTimeInterval: 0.001)
         }
         defer { sessionManager.journalLock.unlock() }
         if let error = control.error { return response(to: request, body: Body(ok: false, error: error)) }
-        // Foreground state is live and read-only; retries must never replay an
-        // earlier job's process group or leave durable response rows.
-        if request.method == "session.foreground" {
-            return response(to: request, body: sessionResponse(request, control: control))
-        }
         let paramsHash = Self.paramsHash(request.payload)
         var createdID: String?
         do {
@@ -287,6 +324,73 @@ public final class HostService: @unchecked Sendable {
         }
     }
 
+    private func routedResponse(_ request: RPCEnvelope, route: HostRouter.Route, control: Control) -> Data {
+        let context = HostRequestContext(requestID: request.requestID, processControl: control.processControl,
+            cancellationError: { [self] in stateLock.withLock({ stopped }) ? "hostStopping" : control.error })
+        func invoke() throws -> Data {
+            try context.checkCancellation()
+            let params = try JSONDecoder().decode([String: HostJSON].self, from: request.payload)
+            let fields = try router.repoGate.withGate(route.methodClass == .mutation ? route.repository(params) : nil,
+                                                     cancellation: { control.error }) {
+                try route.handler(params, context)
+            }
+            var body = fields; body["ok"] = .bool(true)
+            let envelope = RPCEnvelope(version: RPCEnvelope.currentVersion, requestID: request.requestID,
+                                       method: request.method, payload: try JSONEncoder().encode(body))
+            let result = try JSONEncoder().encode(envelope)
+            guard result.count <= RPCFrameCodec.maxFrameSize else { throw HostRPCError("limitExceeded") }
+            return result
+        }
+        do {
+            if route.methodClass == .read { return try invoke() }
+            do {
+                let hash = Self.paramsHash(request.payload)
+                while !sessionManager.journalLock.try() {
+                    try context.checkCancellation(); Thread.sleep(forTimeInterval: 0.001)
+                }
+                do {
+                    if let entry = try journal.entry(requestID: request.requestID) {
+                        guard try journal.matchesRequest(requestID: request.requestID, method: request.method, paramsHash: hash) else {
+                            throw HostRPCError("idempotencyConflict")
+                        }
+                        sessionManager.journalLock.unlock()
+                        return entry.payload
+                    }
+                    sessionManager.journalLock.unlock()
+                } catch { sessionManager.journalLock.unlock(); throw error }
+                let result: Data
+                do { result = try invoke() }
+                catch where control.error != nil { throw HostRPCError(control.error ?? "cancelled") }
+                catch let error as HostRPCError where ["cancelled", "deadlineExceeded", "hostStopping"].contains(error.code) { throw error }
+                catch { result = routedError(request, error: error) }
+                // Once a mutation has committed, store its result even if cancellation
+                // arrives during the append; retry must not repeat the side effect.
+                sessionManager.journalLock.lock()
+                defer { sessionManager.journalLock.unlock() }
+                try journal.appendResponse(requestID: request.requestID, method: request.method, paramsHash: hash, payload: result)
+                return result
+            }
+        } catch { return routedError(request, error: error) }
+    }
+
+    private func routedError(_ request: RPCEnvelope, error: any Error) -> Data {
+        let rpc: HostRPCError
+        if let e = error as? HostRPCError { rpc = e }
+        else if let e = error as? GitError {
+            switch e {
+            case .authenticationRequired(let detail): rpc = HostRPCError("authenticationRequired", detail: detail)
+            case .cancelled: rpc = HostRPCError("cancelled")
+            case .timedOut: rpc = HostRPCError("deadlineExceeded")
+            case .commandFailed(_, let detail): rpc = HostRPCError("gitFailed", detail: detail)
+            default: rpc = HostRPCError("gitFailed", detail: String(describing: e))
+            }
+        }
+        else if error is JournalError { rpc = HostRPCError("journalFailure") }
+        else if error is DecodingError { rpc = HostRPCError("badRequest") }
+        else { rpc = HostRPCError("gitFailed", detail: String(describing: error)) }
+        return response(to: request, body: Body(ok: false, error: rpc.code, detail: rpc.detail))
+    }
+
     /// Called by the transport only after a complete reply frame has been written.
     /// Scheduling is injected by the daemon so teardown runs on its main queue.
     public func responseFlushed(_ payload: Data) {
@@ -307,7 +411,9 @@ public final class HostService: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !stopped else { return }
-        stopped = true
+        let controls = stateLock.withLock { stopped = true; return Array(active.values) }
+        controls.forEach { $0.cancel() }
+        router.jobs.stop()
         sessionManager.stop()
     }
 
@@ -319,6 +425,7 @@ public final class HostService: @unchecked Sendable {
         var cancelled: Bool? = nil
         var result: String? = nil
         var error: String? = nil
+        var detail: String? = nil
         var pid: Int32? = nil
         var startSeconds: UInt64? = nil
         var startMicroseconds: UInt64? = nil

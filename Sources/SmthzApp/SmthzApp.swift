@@ -94,7 +94,7 @@ struct SmthzShellCommands: Commands {
             Button("New Window") {}.keyboardShortcut(bindings.shortcut(KeybindingRegistry.nativeNewWindowChord)).disabled(true)
         }
         CommandGroup(replacing: .pasteboard) {
-            Button("Cut") { NSApp.sendAction(Selector("cut:"), to: NSApp.keyWindow?.firstResponder, from: nil) }
+            Button("Cut") { NSApp.sendAction(#selector(NSText.cut(_:)), to: NSApp.keyWindow?.firstResponder, from: nil) }
                 .keyboardShortcut(bindings.shortcut(KeybindingRegistry.nativeCutChord)).disabled(!bindings.editingNativeText)
             editingAction(.terminalCopySelection, selector: "copy:")
             editingAction(.terminalPaste, selector: "paste:")

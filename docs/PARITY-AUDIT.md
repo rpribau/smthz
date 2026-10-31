@@ -342,9 +342,9 @@ Items requiring the user or outside resources before work can finish: real bundl
 | Children die when the host restarts (no recovery) | D12 | Open (M2 remainder) |
 | Not verified: `smthz attach`, SIGWINCH after UI resize, job control, vim/less/htop, mouse reporting, selection/copy, true colour, `clear`/Ctrl-L visually, session selection by real click, quick-command save round trip, inline rename commit, Stop/Restart Host menu by coordinator, hover states, light/dark on every surface | AGENTS, UI-WIRING | Open |
 | Icon: flat bottom edge on the bust vs reference | AGENTS C3 section | Cosmetic, open |
-| Warnings: EventJournal unused `withUnsafeBytes`, PTYSession deprecated `init(cString:)`, StatusBarView missing Combine import | AGENTS backlog, UI-WIRING | Open |
-| Cleanup: `exited(signal(9))` formatting, `SmthzCore.swift` stub, `main.swift` indentation, stale `docs/orchestration-scripts/` paths, scripts using `pkill -x SmthzApp` | AGENTS | Open |
-| Stale docs: ROADMAP execution/Xcode lines, PARITY ledger all "Not started" | this audit §1.1 | Open (docs) |
+| Warnings: EventJournal unused `withUnsafeBytes`, PTYSession deprecated `init(cString:)`, StatusBarView missing Combine import | AGENTS backlog, UI-WIRING | Fixed 2026-10-31 (WP-HYGIENE); `init(cString:)` was already gone. Remaining: SwiftPM "114 unhandled files" (needs `Package.swift`), 3 test-target warnings |
+| Cleanup: `exited(signal(9))` formatting, `SmthzCore.swift` stub, `main.swift` indentation, stale `docs/orchestration-scripts/` paths, app-quit commands | AGENTS | Stub removed; `HostSessionExit.displayDescription` added (CLI wiring in `Sources/smthz/main.swift` pending); no docs/scripts used the wrong quit command any more (use `pkill -f 'smthz.app/Contents/MacOS/smthz$'`). Open: `main.swift` indentation, orchestration-scripts paths |
+| Stale docs: ROADMAP execution/Xcode lines, PARITY ledger all "Not started" | this audit §1.1 | Fixed 2026-10-31 (WP-HYGIENE) |
 | Performance unknown; terminal polling | this audit | Risk |
 | WebKit and native-chat feasibility unproven (M1 gates) | ROADMAP M1 | Risk: could force reductions |
 

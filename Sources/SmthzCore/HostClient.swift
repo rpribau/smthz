@@ -3,6 +3,7 @@ import Foundation
 public enum HostClientError: Error, Equatable, Sendable, CustomStringConvertible {
     case hostNotRunning
     case hostError(code: String)
+    case detailedHostError(code: String, detail: String?)
     case invalidResponse
     case streamBackpressure
 
@@ -10,6 +11,7 @@ public enum HostClientError: Error, Equatable, Sendable, CustomStringConvertible
         switch self {
         case .hostNotRunning: "smthzd is not running"
         case .hostError(let code): "smthzd: \(code)"
+        case .detailedHostError(let code, let detail): "smthzd: \(code)" + (detail.map { ": " + $0 } ?? "")
         case .invalidResponse: "invalid response from smthzd"
         case .streamBackpressure: "terminal subscriber fell behind; resume from the last consumed cursor"
         }
@@ -62,6 +64,7 @@ public struct HostSessionList: Decodable, Sendable {
 
 /// A synchronous connection. Calls and disconnect must be serialized by its owner.
 public final class HostClient {
+    private struct DetailedStatus: Decodable { let ok: Bool; let error: String?; let detail: String? }
     private struct Status: Decodable { let ok: Bool; let error: String? }
     private let transport: UnixSocketClient
     private let socketPath: String
@@ -161,16 +164,34 @@ public final class HostClient {
 
     public func call<Params: Encodable, Result: Decodable>(method: String, params: Params,
         requestID: String = RequestID.generate().rawValue, timeoutMilliseconds: Int = 5_000) throws -> Result {
+        let payload = try rawCall(method: method, params: JSONEncoder().encode(params), requestID: requestID,
+                                  timeoutMilliseconds: timeoutMilliseconds)
+        let status = try JSONDecoder().decode(Status.self, from: payload)
+        guard status.ok else { throw HostClientError.hostError(code: status.error ?? "unknownError") }
+        return try JSONDecoder().decode(Result.self, from: payload)
+    }
+
+    /// Returns the complete payload, including failure code and human detail.
+    public func rawCall(method: String, params: Data = Data("{}".utf8),
+                        requestID: String = RequestID.generate().rawValue,
+                        timeoutMilliseconds: Int = 5_000) throws -> Data {
         let request = RPCEnvelope(version: RPCEnvelope.currentVersion, requestID: requestID,
-                                  method: method, payload: try JSONEncoder().encode(params),
-                                  authorization: credential, timeoutMilliseconds: timeoutMilliseconds)
+                                  method: method, payload: params, authorization: credential,
+                                  timeoutMilliseconds: timeoutMilliseconds)
         let response = try JSONDecoder().decode(RPCEnvelope.self,
             from: transport.request(JSONEncoder().encode(request), timeout: Double(max(1, min(timeoutMilliseconds, 30_000))) / 1000 + 1))
         guard response.version == request.version, response.requestID == request.requestID,
               response.method == request.method else { throw HostClientError.invalidResponse }
-        let status = try JSONDecoder().decode(Status.self, from: response.payload)
-        guard status.ok else { throw HostClientError.hostError(code: status.error ?? "unknownError") }
-        return try JSONDecoder().decode(Result.self, from: response.payload)
+        return response.payload
+    }
+
+    public func callWithDetail<Params: Encodable, Result: Decodable>(method: String, params: Params,
+        requestID: String = RequestID.generate().rawValue, timeoutMilliseconds: Int = 5_000) throws -> Result {
+        let payload = try rawCall(method: method, params: JSONEncoder().encode(params), requestID: requestID,
+                                  timeoutMilliseconds: timeoutMilliseconds)
+        let status = try JSONDecoder().decode(DetailedStatus.self, from: payload)
+        guard status.ok else { throw HostClientError.detailedHostError(code: status.error ?? "unknownError", detail: status.detail) }
+        return try JSONDecoder().decode(Result.self, from: payload)
     }
 
     /// Use a separate connection to cancel an in-flight synchronous call.

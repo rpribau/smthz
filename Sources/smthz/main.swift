@@ -11,6 +11,8 @@ Usage: smthz --version | --help | paths
        smthz read <id> [--from N] [--socket <path>]
        smthz kill <id> [--socket <path>]
        smthz attach <id> [--socket <path>]
+  smthz job list|get|cancel|wait [--job-id <id>] [--socket <path>] [--json]
+  Non-interactive commands accept --json.
 write decodes literal \\n escapes; attach detaches on Ctrl-] and leaves the session running.
 """
 
@@ -29,8 +31,7 @@ func terminalSize() -> (rows: Int, cols: Int) {
 
 func exitDescription(_ status: HostSessionExit?) -> String {
     if let code = status?.code { return String(code) }
-    if let signal = status?.signal { return "signal(\(signal))" }
-    return "running"
+    return status?.displayDescription ?? "running"
 }
 
 func attach(_ client: HostClient, id: String) throws {
@@ -125,19 +126,32 @@ func run() throws {
     var from: UInt64 = 0
     var positional: [String] = []
     let commands = ["ping", "run", "sessions", "write", "read", "kill", "attach"]
-    if command == "--help" { guard rest.isEmpty else { throw UsageError(message: usage) }; print(usage); return }
+    if command == "--help" {
+        guard rest.isEmpty || rest == ["--json"] else { throw UsageError(message: usage) }
+        if rest == ["--json"] { try CLICommon.printResult(["usage": .string(usage)]) } else { print(usage) }
+        return
+    }
     if command == "--version" || command == "-v" {
-        guard rest.isEmpty else { throw UsageError(message: usage) }
-        print("smthz \(ApplicationIdentity.version)"); return
+        guard rest.isEmpty || rest == ["--json"] else { throw UsageError(message: usage) }
+        if rest == ["--json"] { try CLICommon.printResult(["version": .string(ApplicationIdentity.version)]) }
+        else { print("smthz \(ApplicationIdentity.version)") }
+        return
     }
     if command == "paths" {
-        guard rest.isEmpty else { throw UsageError(message: usage) }
+        guard rest.isEmpty || rest == ["--json"] else { throw UsageError(message: usage) }
         let home = FileManager.default.homeDirectoryForCurrentUser
+        if rest == ["--json"] {
+            try CLICommon.printResult(["applicationSupport": .string(ApplicationIdentity.applicationSupportDirectory(home: home).path),
+                "cache": .string(ApplicationIdentity.cacheDirectory(home: home).path), "logs": .string(ApplicationIdentity.logDirectory(home: home).path)])
+            return
+        }
         print(ApplicationIdentity.applicationSupportDirectory(home: home).path)
         print(ApplicationIdentity.cacheDirectory(home: home).path)
         print(ApplicationIdentity.logDirectory(home: home).path)
         return
     }
+    if try CLICommon.dispatch(command: command, arguments: rest, defaultSocket: socket) { return }
+    var jsonOutput = false
     guard commands.contains(command) else { throw UsageError(message: "unknown command: \(command)\n\(usage)") }
     var executable: String?
     var childArguments: [String] = []
@@ -152,6 +166,7 @@ func run() throws {
             positional.append(token); continue
         }
         switch token {
+        case "--json": jsonOutput = true
         case "--socket":
             guard !rest.isEmpty else { throw UsageError(message: "missing socket path") }
             socket = rest.removeFirst()
@@ -170,6 +185,28 @@ func run() throws {
     guard positional.count == expected, command != "run" || executable != nil else { throw UsageError(message: usage) }
     let client = try HostClient(socketPath: socket)
     defer { client.disconnect() }
+    if jsonOutput {
+        var method = ""
+        var params: [String: HostJSON] = [:]
+        switch command {
+        case "ping": method = "ping"
+        case "run":
+            method = "session.create"
+            let size = terminalSize()
+            params = ["executable": .string(executable!), "arguments": .array(childArguments.map(HostJSON.string)),
+                      "rows": .number(Double(size.rows)), "cols": .number(Double(size.cols))]
+            params["cwd"] = cwd.map(HostJSON.string)
+        case "sessions": method = "session.list"
+        case "write":
+            method = "session.write"
+            params = ["id": .string(positional[0]), "data_base64": .string(Data(positional[1].replacingOccurrences(of: "\\n", with: "\n").utf8).base64EncodedString())]
+        case "read": method = "session.read"; params = ["id": .string(positional[0]), "from": .number(Double(from))]
+        case "kill": method = "session.close"; params = ["id": .string(positional[0])]
+        default: throw HostRPCError("badRequest", detail: "attach requires interactive output")
+        }
+        try CLICommon.printResult(CLICommon.call(client, method, params))
+        return
+    }
     switch command {
     case "ping":
         struct Params: Encodable {}
@@ -202,8 +239,13 @@ func run() throws {
 
 do { try run() }
 catch let error as UsageError {
+    if CommandLine.arguments.contains("--json") { CLICommon.printError(error); exit(1) }
     FileHandle.standardError.write(Data((error.message + "\n").utf8)); exit(2)
 } catch {
+    if CommandLine.arguments.dropFirst().prefix(while: { $0 != "--" }).contains("--json") {
+        CLICommon.printError(error); exit(error is CLIInterrupted ? 130 : 1)
+    }
+    if error is CLIInterrupted { exit(130) }
     let message = (error as? TerminalError)?.message ?? String(describing: error)
     FileHandle.standardError.write(Data((message + "\n").utf8)); exit(1)
 }

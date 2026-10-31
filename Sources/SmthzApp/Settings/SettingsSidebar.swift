@@ -1,3 +1,4 @@
+import SmthzCore
 import SwiftUI
 
 /// One settings page (UI-DETAIL §11.1). `id` is stable and used for routing.
@@ -114,6 +115,9 @@ struct SettingsGroup: Identifiable {
                 guard !query.isEmpty else { return true }
                 return page.title.localizedCaseInsensitiveContains(query)
                     || page.description.localizedCaseInsensitiveContains(query)
+                    || (page.id == "shortcuts" && KeybindingRegistry.definitions.contains {
+                        $0.title.localizedCaseInsensitiveContains(query)
+                    })
             }
             return pages.isEmpty ? nil : SettingsGroup(title: group.title, pages: pages)
         }

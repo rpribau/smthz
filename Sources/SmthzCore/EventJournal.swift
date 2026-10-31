@@ -63,7 +63,7 @@ public final class EventJournal: @unchecked Sendable {
 
         sqlite3_bind_text(stmt, 1, requestID, -1, transient)
         sqlite3_bind_text(stmt, 2, kind, -1, transient)
-        payload.withUnsafeBytes {
+        _ = payload.withUnsafeBytes {
             sqlite3_bind_blob(stmt, 3, $0.baseAddress, Int32(payload.count), transient)
         }
 

@@ -43,8 +43,17 @@ Compare Release builds against Orca with equivalent workloads on the same hardwa
 
 ## Execution ownership
 
-Only Hermes authors implementation code, using its current configured model `yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF`. Use a fresh session for each bounded task. The coordinator prepares specifications, documents decisions, reviews changes and executes verification; route code corrections back to Hermes. GPT-6.1-Sol High research/design tasks have completed; their findings are reflected in this roadmap and the ledger.
+The coordinator never writes product code: it writes specifications, documents decisions, and verifies every delivery (scope diff, build, full test suite three consecutive runs, real binaries/app). Implementation is authored by dispatched workers, one bounded task per fresh session: Codex GPT-6.1 Sol (medium) is the default author, with Opus 5.5 and Sonnet 5.5 workers for research, plans, docs and selected code tasks (Codex GPT-6-Luna was also used). Hermes (local model) is paused and resumes only on the user's instruction. Workers do not run git write commands; commits and pushes are made by the coordinator.
 
 ## Current state
 
-Implementation started 2026-10-23 local time. No milestone is accepted yet. Full Xcode is not installed in `/Applications`; selected tools are Command Line Tools, Swift 6.4 and SDK 27. Building a Swift package is possible; full Xcode/UI/signing/simulator verification remains pending. No infrastructure or signing credentials have been provisioned.
+Implementation started 2026-10-23. Updated 2026-10-31. Xcode 27.1 is installed in `/Applications`; `xcode-select` still points at the Command Line Tools, so builds use `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` (Swift 6.4, macOS 27 SDK). The app is packaged as an ad-hoc signed `build/smthz.app` with a bundled `smthzd`; no signing identity, infrastructure or service credentials have been provisioned. No milestone is formally accepted yet.
+
+| ID | Status (2026-10-31) |
+|---|---|
+| M0 | Mostly done: package, identities, journal, docs; repo published (MIT). Open: real bundle identifier |
+| M1 | Partial: SwiftTerm chosen (`docs/TERMINAL-ENGINE.md`); editor experiment recommends Monaco in WKWebView (`docs/EDITOR-EXPERIMENT.md`); browser/agents experiment GO with reductions (`docs/BROWSER-AGENTS-EXPERIMENT.md`). Linux host and Claude control path not proven |
+| M2 | Largely done locally: authenticated Unix-socket RPC, versioning, idempotency, cancellation, limits, single-instance host, disk scrollback, push streaming. Open: recovery after host restart, remote WebSocket TLS/auth, `handshake`/`request.cancel` outside durable idempotency |
+| M3 | In progress: tabs, groups, splits, persistence, host auto-start, keybinding registry done; windows, floating terminal and terminal conformance checks open |
+| M4 | Started: plan in `docs/M4-PLAN.md`; workspace/repo host work in progress |
+| M5-M11 | Not started (visual-only placeholders exist for several pages); see `docs/PARITY.md` and `docs/PARITY-AUDIT.md` |

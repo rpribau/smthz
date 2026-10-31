@@ -12,11 +12,13 @@ let package = Package(
         .executable(name: "SmthzApp", targets: ["SmthzApp"])
     ],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.99.1")
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.99.1"),
+        .package(url: "https://github.com/jpsim/Yams", exact: "6.2.2")
     ],
     targets: [
         .target(
             name: "SmthzCore",
+            dependencies: [.product(name: "Yams", package: "Yams")],
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
         ),
         .executableTarget(

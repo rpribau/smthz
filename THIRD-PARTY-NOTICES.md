@@ -10,6 +10,9 @@ smthz is not yet licensed (see [docs/LICENSE-DECISION.md](docs/LICENSE-DECISION.
 | [swift-argument-parser](https://github.com/apple/swift-argument-parser) | 1.8.2 (resolved) | Apache-2.0 | Transitive SwiftPM dependency in `Package.resolved` |
 | [Geist](https://github.com/vercel/geist-font) | `Geist-Variable.ttf` as bundled (font copyright string: 2024) | SIL OFL 1.1 | UI font, copied into the app bundle by `scripts/package-app.sh` |
 | [Lucide](https://lucide.dev) | SVG subset in `Sources/SmthzApp/Resources/Icons/` (upstream version not recorded) | ISC (with Feather portions under MIT) | UI icons; license file `LUCIDE-LICENSE.txt` is bundled next to them |
+| [Yams](https://github.com/jpsim/Yams) | 6.2.2 (exact pin) | MIT | YAML parsing in the `SmthzCore` target (`SmthzConfig.swift`); see the libYAML note below |
+| [emojibase-data](https://github.com/milesj/emojibase) | 17.0.0 (`en/shortcodes/emojibase.json`, embedded as generated source) | MIT | Emoji shortcodes in `Sources/SmthzCore/EmojiShortcodes.swift` |
+| Orca 1.4.238 marine-creature names | 552 names from `src/shared/marine-creature-names-{primary,secondary}.ts` | MIT | Generated workspace names in `Sources/SmthzCore/MarineCreatureNames.swift` |
 | Orca 1.4.238 | reference only | MIT | Behaviour and layout reference; not compiled in. See below |
 
 Notes for the owner (details in [docs/PUBLISHING.md](docs/PUBLISHING.md)):
@@ -178,10 +181,76 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
+## Yams (MIT)
+
+Yams vendors libYAML as its `CYaml` target. The Yams README states that libYAML is MIT licensed, but Yams 6.2.2 ships no libYAML copyright file; copy libYAML's upstream `License` file here before a release (not done: its text was not checked).
+
+Copyright (c) 2016 JP Simard.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## emojibase-data (MIT)
+
+Copyright (c) 2017-2019 Miles Johnson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## swift-png, h, swift-argument-parser (Apache-2.0)
 
 The full Apache License 2.0 text is available at https://www.apache.org/licenses/LICENSE-2.0 and in each repository's LICENSE file. Copyright holders are named in those repositories.
 
 ## Orca (MIT), reference only
 
-Copyright (c) 2026 Lovecast Inc. Orca's MIT license (`reference/orca-1.4.238/LICENSE`) requires its copyright and permission notice to be kept in copies or substantial portions of the Software. smthz reimplements behaviour and mirrors a documented UI layout; if any Orca code, text or asset is copied into this repository, keep that notice with it.
+Copyright (c) 2026 Lovecast Inc. Orca's MIT license (`reference/orca-1.4.238/LICENSE`) requires its copyright and permission notice to be kept in copies or substantial portions of the Software. smthz reimplements behaviour and mirrors a documented UI layout; if any Orca code, text or asset is copied into this repository, keep that notice with it. The 552 marine-creature names in `Sources/SmthzCore/MarineCreatureNames.swift` are copied from Orca's `src/shared/marine-creature-names-primary.ts` and `-secondary.ts`, so that notice applies to them:
+
+Copyright (c) 2026 Lovecast Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

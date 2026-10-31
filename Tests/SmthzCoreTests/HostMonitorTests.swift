@@ -3,10 +3,18 @@ import Darwin
 import Testing
 @testable import SmthzCore
 
+private final class MonitorRequestCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func increment() { lock.withLock { value += 1 } }
+    var count: Int { lock.withLock { value } }
+}
+
 private final class HostMonitorFixture {
     let directory = "/tmp/smthz-mon-\(UUID().uuidString.prefix(8))"
     let service: HostService
     let server: UnixSocketServer
+    private let requests: MonitorRequestCount
     var socket: String { directory + "/s" }
 
     init(identity: ProcessIdentity? = ProcessIdentity.current()) throws {
@@ -14,13 +22,14 @@ private final class HostMonitorFixture {
         let journal = try EventJournal(path: directory + "/j")
         let host = HostService(journal: journal, hostIdentity: identity)
         service = host
-        server = try UnixSocketServer(path: directory + "/s") { host.handle($0) }
+        let requests = MonitorRequestCount()
+        self.requests = requests
+        server = try UnixSocketServer(path: directory + "/s") { requests.increment(); return host.handle($0) }
     }
 
     func responseCount() throws -> Int {
-        // A separate SQLite connection avoids sharing the service's connection.
-        try EventJournal(path: directory + "/j").read(after: 0, limit: 100_000)
-            .filter { $0.kind.hasPrefix("response:") }.count
+        // Read requests deliberately leave no journal rows.
+        requests.count
     }
 
     deinit {

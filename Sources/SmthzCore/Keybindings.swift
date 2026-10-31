@@ -460,4 +460,27 @@ public struct KeybindingRegistry: Sendable {
         }
         return result
     }
+
+    /// Other actions sharing `chord` with `action` in one of its conflict buckets; deliberate pairs excluded.
+    public func conflictingActions(for action: KeybindingAction, chord: KeyChord) -> [KeybindingAction] {
+        let buckets = Self.conflictBuckets(action)
+        return KeybindingAction.allCases.filter { other in
+            other != action && !Self.conflictBuckets(other).isDisjoint(with: buckets)
+                && !Self.deliberatePairs.contains([action, other]) && chords(for: other).contains(chord)
+        }
+    }
+
+    private static func conflictBuckets(_ action: KeybindingAction) -> Set<String> {
+        Set([action.definition.scope.rawValue, action.definition.conflictGroup].compactMap { $0 })
+    }
+
+    public static func isDigitIndex(_ action: KeybindingAction) -> Bool {
+        action == .tabSelectByIndex || action == .workspaceSelectByIndex
+    }
+
+    /// Chords as stored and edited: digit-index actions keep one representative chord ending in 1.
+    public func representativeChords(for action: KeybindingAction) -> [KeyChord] {
+        let all = chords(for: action)
+        return Self.isDigitIndex(action) ? all.filter { $0.key == "1" } : all
+    }
 }

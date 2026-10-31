@@ -5,7 +5,8 @@ import SwiftTerm
 /// Persisted settings contract for UI-29 and terminal surfaces. Read a fresh snapshot on defaults
 /// changes, then call apply(to:isActive:) from makeNSView/updateNSView after the base theme.
 /// Padding, line height, copy-on-select and split metrics need terminal/split integration; their
-/// controls remain disabled rather than saving preferences that have no effect.
+/// controls remain disabled rather than saving preferences that have no effect. Surfaces do not
+/// yet apply the snapshot when they are created: changes reach terminals open at change time.
 @MainActor
 struct TerminalSettingsModel {
     enum Key {
@@ -21,6 +22,11 @@ struct TerminalSettingsModel {
         static let inactiveOpacity = "terminal.inactiveOpacity"
         static let scrollbackRows = "terminal.scrollbackRows"
         static let optionAsAlt = "terminal.optionAsAlt"
+        /// Absent = Automatic (Orca: 4.5 on light backgrounds, 3 on dark); 1 = Off.
+        static let minimumContrast = "terminal.minimumContrastRatio"
+        static let scrollSensitivity = "terminal.scrollSensitivity"
+        static let cursorOpacity = "terminal.cursorOpacity"
+        static let gpuAcceleration = "terminal.gpuAcceleration"
     }
 
     let defaults: UserDefaults
@@ -35,6 +41,19 @@ struct TerminalSettingsModel {
     var inactiveOpacity: Double { number(Key.inactiveOpacity, fallback: 0.9, range: 0.2...1) }
     var scrollbackRows: Int { Int(number(Key.scrollbackRows, fallback: 10_000, range: 100...100_000)) }
     var optionAsAlt: String { defaults.string(forKey: Key.optionAsAlt) ?? "auto" }
+    var customMinimumContrast: Double? {
+        defaults.object(forKey: Key.minimumContrast) == nil ? nil : number(Key.minimumContrast, fallback: 1, range: 1...21)
+    }
+    var scrollSensitivity: Double { number(Key.scrollSensitivity, fallback: 1, range: 0.5...3) }
+    var cursorOpacity: Double { number(Key.cursorOpacity, fallback: 1, range: 0.1...1) }
+    var gpuAcceleration: String { defaults.string(forKey: Key.gpuAcceleration) ?? "auto" }
+
+    func minimumContrast(for background: NSColor) -> Double {
+        if let customMinimumContrast { return customMinimumContrast }
+        let rgb = background.usingColorSpace(.sRGB) ?? background
+        let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+        return luminance > 0.5 ? 4.5 : 3
+    }
 
     var font: NSFont {
         let weight: NSFont.Weight
@@ -63,7 +82,13 @@ struct TerminalSettingsModel {
     }
 
     func apply(to terminal: TerminalView, isActive: Bool = true) {
-        palette(for: terminal.effectiveAppearance).apply(to: terminal)
+        let palette = palette(for: terminal.effectiveAppearance)
+        palette.apply(to: terminal)
+        terminal.caretColor = palette.cursor.withAlphaComponent(cursorOpacity)
+        terminal.minimumContrastRatio = minimumContrast(for: palette.background)
+        terminal.scrollSensitivity = scrollSensitivity
+        // Automatic keeps SwiftTerm's renderer choice; On/Off switch it explicitly.
+        if gpuAcceleration != "auto" { try? terminal.setUseMetal(gpuAcceleration == "on") }
         if terminal.font != font { terminal.font = font }
         switch (cursorShape, cursorBlink) {
         case ("bar", true): terminal.setCursorStyle(.blinkBar)

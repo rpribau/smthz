@@ -106,7 +106,7 @@ public enum FrameValidation {
     }
 }
 
-private final class StoreDiagnostics {
+private final class StoreDiagnostics: @unchecked Sendable {
     static let key = CodingUserInfoKey(rawValue: "ShellStateStore.diagnostics")!
     var messages: [String] = []
 }

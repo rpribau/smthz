@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// VISUAL-ONLY: stub data until terminal shell, rendering, split-pane and interaction settings integration.
+// VISUAL-ONLY: rows built with SmthzUnavailableSetting wait for terminal shell, split-pane and interaction integration.
 struct TerminalSettingsPane: View {
     let model: ShellController
 
@@ -26,10 +26,18 @@ struct SmthzTerminalSettingsControls: View {
     @AppStorage(TerminalSettingsModel.Key.inactiveOpacity) private var inactiveOpacity = 0.9
     @AppStorage(TerminalSettingsModel.Key.scrollbackRows) private var scrollbackRows = 10_000
     @AppStorage(TerminalSettingsModel.Key.optionAsAlt) private var optionAsAlt = "auto"
+    @AppStorage(TerminalSettingsModel.Key.minimumContrast) private var minimumContrast: Double?
+    @AppStorage(TerminalSettingsModel.Key.scrollSensitivity) private var scrollSensitivity = 1.0
+    @AppStorage(TerminalSettingsModel.Key.cursorOpacity) private var cursorOpacity = 1.0
+    @AppStorage(TerminalSettingsModel.Key.gpuAcceleration) private var gpuAcceleration = "auto"
+    /// Read by TerminalSessionView when a program sends OSC 52.
+    @AppStorage("terminal.allowOsc52Clipboard") private var allowOsc52Clipboard = true
+    /// Inverse of the close coordinator's "Don't ask again" preference.
+    @AppStorage(SmthzCloseConfirmationCoordinator.runningPreferenceKey) private var skipRunningConfirmation = false
     @State private var previewDivider = false
 
     private var settingsSignature: String {
-        "\(fontSize)|\(fontFamily)|\(fontWeight)|\(cursorShape)|\(cursorBlink)|\(themeMode)|\(darkTheme)|\(lightTheme)|\(inactiveOpacity)|\(scrollbackRows)|\(optionAsAlt)"
+        "\(fontSize)|\(fontFamily)|\(fontWeight)|\(cursorShape)|\(cursorBlink)|\(themeMode)|\(darkTheme)|\(lightTheme)|\(inactiveOpacity)|\(scrollbackRows)|\(optionAsAlt)|\(String(describing: minimumContrast))|\(scrollSensitivity)|\(cursorOpacity)|\(gpuAcceleration)"
     }
 
     var body: some View {
@@ -87,8 +95,20 @@ struct SmthzTerminalSettingsControls: View {
     private var rendering: some View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsGroupTitle(title: "Rendering")
-            SmthzUnavailableSetting("GPU Acceleration", value: "Auto / On / Off")
-            SmthzUnavailableSetting("Color Contrast", value: "Automatic / Off / Custom")
+            SettingsRow("GPU Acceleration", detail: "Render terminals with Metal. Automatic keeps the default renderer.") {
+                SettingsSegmented(options: [("Auto", "auto"), ("On", "on"), ("Off", "off")],
+                                  selection: $gpuAcceleration, accessibilityLabel: "GPU Acceleration")
+            }
+            SettingsRow("Color Contrast", detail: contrastDescription) {
+                SettingsSegmented(options: [("Automatic", "auto"), ("Off", "off"), ("Custom", "custom")],
+                                  selection: contrastMode, accessibilityLabel: "Color Contrast")
+            }
+            if let ratio = minimumContrast, ratio != 1 {
+                SettingsRow("Contrast target") {
+                    percentSlider(Binding(get: { ratio }, set: { minimumContrast = $0 }), range: 1.1...21, step: 0.1,
+                                  label: "Contrast target") { String(format: "%.1f:1", $0) }
+                }
+            }
             SmthzUnavailableSetting("Inline Images", value: "Off")
         }
     }
@@ -101,7 +121,9 @@ struct SmthzTerminalSettingsControls: View {
                                   selection: $cursorShape, accessibilityLabel: "Cursor Shape")
             }
             SettingsRow("Blinking Cursor") { SettingsToggle(title: "Blinking Cursor", isOn: $cursorBlink) }
-            SmthzUnavailableSetting("Cursor Opacity", value: "100%")
+            SettingsRow("Cursor Opacity") {
+                percentSlider($cursorOpacity, range: 0.1...1, step: 0.05, label: "Cursor Opacity") { "\(Int(($0 * 100).rounded()))%" }
+            }
         }
     }
 
@@ -181,13 +203,30 @@ struct SmthzTerminalSettingsControls: View {
     private var interaction: some View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsGroupTitle(title: "Interaction")
-            SmthzUnavailableSetting("Scroll Speed", value: "Normal / Fast / TUI")
+            SettingsRow("Scroll Speed", detail: "Adjust how wheel input feels in scrollback and in mouse-aware terminal apps.") {
+                Button("Reset") { scrollSensitivity = 1 }.buttonStyle(SmthzButtonStyle(.ghost, size: .xs))
+                    .disabled(scrollSensitivity == 1)
+            }
+            SettingsRow("Normal", detail: "Scrollback wheel multiplier.") {
+                percentSlider($scrollSensitivity, range: 0.5...3, step: 0.05, label: "Normal scroll speed") {
+                    String(format: "%gx", ($0 * 100).rounded() / 100)
+                }
+            }
+            SmthzUnavailableSetting("Fast", detail: "Extra multiplier while scrolling with a modifier key.", value: "5x")
+            SmthzUnavailableSetting("TUI", detail: "Mouse-aware terminal apps.", value: "1x")
             SmthzUnavailableSetting("Right-click to paste", value: "Off")
             SmthzUnavailableSetting("Focus Follows Mouse", value: "Off")
             SmthzUnavailableSetting("Copy on Select", value: "Off")
             SmthzUnavailableSetting("Trim Gutter on Copy", value: "Off")
-            SmthzUnavailableSetting("Allow TUI Clipboard Writes (OSC 52)", value: "Off")
-            SmthzUnavailableSetting("Ask Before Closing Running Terminals", value: "On")
+            SettingsRow("Allow TUI Clipboard Writes (OSC 52)",
+                        detail: "Let terminal programs copy to the system clipboard with OSC 52.") {
+                SettingsToggle(title: "Allow TUI Clipboard Writes (OSC 52)", isOn: $allowOsc52Clipboard)
+            }
+            SettingsRow("Ask Before Closing Running Terminals",
+                        detail: "Confirm before closing a terminal whose foreground process is not the shell.") {
+                SettingsToggle(title: "Ask Before Closing Running Terminals",
+                               isOn: Binding(get: { !skipRunningConfirmation }, set: { skipRunningConfirmation = !$0 }))
+            }
         }
     }
 
@@ -227,6 +266,33 @@ struct SmthzTerminalSettingsControls: View {
             }
             SmthzUnavailableSetting("JIS Yen (¥) to Backslash", value: "Off")
         }
+    }
+
+    private var contrastMode: Binding<String> {
+        Binding(get: { minimumContrast == nil ? "auto" : minimumContrast == 1 ? "off" : "custom" },
+                set: { mode in
+                    switch mode {
+                    case "auto": minimumContrast = nil
+                    case "off": minimumContrast = 1
+                    default: if minimumContrast == nil || minimumContrast == 1 { minimumContrast = 4.5 }
+                    }
+                })
+    }
+
+    private var contrastDescription: String {
+        switch contrastMode.wrappedValue {
+        case "auto": "Balances readability with your terminal theme. Recommended."
+        case "off": "Keeps program colors unchanged, including dim text and Powerline separators."
+        default: "Choose how much to increase contrast between text and its background."
+        }
+    }
+
+    private func percentSlider(_ value: Binding<Double>, range: ClosedRange<Double>, step: Double, label: String,
+                               format: @escaping (Double) -> String) -> some View {
+        HStack(spacing: 8) {
+            Slider(value: value, in: range, step: step).frame(width: 120).accessibilityLabel(label)
+            Text(format(value.wrappedValue)).monospacedDigit().frame(width: 52, alignment: .trailing)
+        }.font(SmthzFont.ui(size: 13))
     }
 
     private func unavailableButton(_ title: String) -> some View {
